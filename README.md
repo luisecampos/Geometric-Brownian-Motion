@@ -4,14 +4,14 @@ A Monte Carlo simulation engine for modeling equity and commodity price paths us
 
 ## Overview
 
-This simulator implements the Geometric Brownian Motion (GBM) model, the foundational framework for derivatives pricing and portfolio risk management. Widely used in investment banking, trading, and quantitative finance.
+This simulator implements the Geometric Brownian Motion (GBM) model, the foundational framework for derivatives pricing and portfolio risk management. Uses Monte Carlo methods to generate realistic price trajectories for equities and commodities.
 
 ## Features
 
-- **GBM Price Path Generation**: Simulates correlated asset price trajectories
-- **Black-Scholes Validation**: Compares Monte Carlo results against closed-form option pricing
+- **GBM Price Path Generation**: Simulates correlated asset price trajectories using Itô calculus
+- **Multi-Asset Support**: Backtested on equities (S&P 500, individual stocks) and commodities (WTI crude oil)
 - **Risk Metrics**: Calculates Value-at-Risk (VaR) and Conditional Value-at-Risk (CVaR) at 95% confidence
-- **Multi-Asset Support**: Backtested on equities (S&P 500, individual stocks) 
+- **Visualization**: Outputs price paths and distribution plots for analysis
 
 ## Usage
 
@@ -19,11 +19,11 @@ This simulator implements the Geometric Brownian Motion (GBM) model, the foundat
 python GBM.py
 ```
 
-## Results
+## Backtests
 
-- **Accuracy**: Monte Carlo option prices align within 2-3% of Black-Scholes analytical solutions
-- **Backtests**: Validated on historical S&P 500 and; 95% confidence intervals capture actual price movements
-- **Output**: Price simulations, visualizations, and risk metrics
+- S&P 500 historical price modeling
+- WTI crude oil commodity forecasting
+- 95% confidence interval analysis
 
 ## Technical Stack
 
@@ -34,8 +34,6 @@ python GBM.py
 
 ## Applications
 
-- Options pricing and Greeks calculation
 - Portfolio Value-at-Risk analysis
 - Energy commodity forecasting
-- Investment decision support
-
+- Price path simulation for financial modeling
