@@ -7,7 +7,7 @@ quant/               Quant/trading tools
   Black-Scholes.py
   EDGARX.py                SEC EDGAR 10-K scraper + dashboard (see EDGARX_README.md)
   EDGARX_README.md
-  GBM_citadel.py
+  GBM.py
   WTI_OU.py                Ornstein-Uhlenbeck model for WTI crude
   dcf_ep_model.py
   Market_Widget.py         Always-on-top desktop widget: DOW/NASDAQ/S&P/10Y/BTC

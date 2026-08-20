@@ -6,7 +6,7 @@
 - [ ] `stat_arb_engine`: add stop-losses (exit if z-score blows past 3.5σ) and Kelly-sizing comparison
 - [ ] Update `quant/EDGARX_README.md` — it documents `edgar_scraper.py`/`analyze_10k.py` but the code now lives combined in `EDGARX.py`
 - [ ] Options strategy backtester using the `vol_surface.py` BS pricer
-- [ ] Monte Carlo exotic-option pricer (revive/extend `GBM_citadel.py` for Asian/barrier options)
+- [ ] Monte Carlo exotic-option pricer (revive/extend `GBM.py` for Asian/barrier options)
 - [ ] Vol surface arbitrage scanner (calendar/butterfly violations on live chains)
 - [ ] `Market_Widget.py` polish: sparkline history + price-cross alerts
 
@@ -25,5 +25,6 @@
 - [ ] Blackjack simulator w/ card counting overlay
 
 ## Repo maintenance
-- [ ] Decide fate of `GBM.py` vs `GBM_citadel.py` (git still shows `GBM.py` as deleted/uncommitted from before the reorg)
-- [ ] Commit the folder reorg (on a branch, given `main` has diverged from `origin`)
+- [x] Decide fate of `GBM.py` vs `GBM_citadel.py` — keeping `GBM.py`, deleted `GBM_citadel.py`
+- [x] Commit the folder reorg (on a branch, given `main` has diverged from `origin`)
+- [ ] Decide whether/how to reconcile `main` with `origin` (unrelated histories — `origin/main` was never merged into the current `main`)
