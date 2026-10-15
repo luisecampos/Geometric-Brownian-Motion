@@ -1,0 +1,7 @@
+torch>=2.2
+numpy
+pygame-ce
+matplotlib
+
+# CPU-only torch install (this project's network is tiny - no GPU needed):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu

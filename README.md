@@ -22,6 +22,12 @@ agents/               Voice / tool-using AI agents
 
 games/                Games (some doubling as AI/ML sandboxes)
   flappy_base.py            Flappy Bird base game, staged for a NEAT AI to plug into
+  snake_dqn/                Deep Q-Network agent that learns Snake from scratch (own subproject, see its README)
+    snake_env.py              Gym-like game engine (reset/step), no rendering, no AI
+    model.py                  Q-network (MLP) + experience replay buffer
+    agent.py                  Epsilon-greedy DQN agent: learning step, target-network sync, checkpoints
+    train.py                  Headless training loop - logs, checkpoints, learning-curve plot
+    play.py                   Watch a trained checkpoint play, or play yourself (`--human`) for comparison
   mental_math/              Adaptive mental-math speed trainer (pygame)
     main.py                   Entry point - run this (`python main.py`)
     config.py                 Colors/fonts/window size, tier + session-length constants

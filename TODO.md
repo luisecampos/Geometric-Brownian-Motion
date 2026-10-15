@@ -18,7 +18,8 @@
 ## Games
 - [ ] Finish the NEAT AI for `flappy_base.py` (it's literally staged for this)
 - [ ] Market maker game — quote bid/ask on a simulated random-walk price (reuse GBM/OU code), get run over by informed flow, PnL tracked live
-- [ ] Snake + DQN agent, as a second NEAT-vs-RL comparison point
+- [x] Snake + DQN agent, as a second NEAT-vs-RL comparison point (`games/snake_dqn/`)
+- [ ] `snake_dqn`: try Double DQN / Dueling DQN once vanilla DQN plateaus (see its README's "Possible extensions")
 - [ ] Connect 4 with minimax/alpha-beta
 - [ ] 2048 + expectimax solver
 - [ ] Wordle clone + entropy-based solver

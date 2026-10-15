@@ -18,3 +18,6 @@ games/n_back_stats.json
 games/sequence_recall_stats.json
 games/probability_quickfire_stats.json
 quant/stat_arb_engine/stat_arb/outputs/
+games/snake_dqn/checkpoints/
+games/snake_dqn/training_log.json
+games/snake_dqn/learning_curve.png
