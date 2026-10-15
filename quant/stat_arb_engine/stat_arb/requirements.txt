@@ -4,3 +4,6 @@ numpy>=1.26.0
 statsmodels>=0.14.0
 scipy>=1.11.0
 matplotlib>=3.8.0
+scikit-learn>=1.4.0
+# Only needed for a .parquet trade log; the default is SQLite (stdlib).
+pyarrow>=14.0.0

@@ -14,6 +14,7 @@ import os
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")   # headless-safe: never try to open a GUI window
 import matplotlib.pyplot as plt
@@ -99,4 +100,77 @@ def plot_tearsheet(results, out_dir: str = "outputs") -> str:
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
+    return out_path
+
+
+def plot_comparison(variants: dict, rows: list[dict], importances: dict,
+                    calibration: dict, out_dir: str = "outputs") -> str:
+    """
+    Baseline vs learned tearsheet:
+      1. Equity curves of every variant on the same days
+      2. Sharpe and deflated Sharpe per variant
+      3. Out-of-sample permutation importance per classifier
+      4. Out-of-sample calibration (predicted vs realised win rate)
+    variants: {name: PortfolioResults}; rows: print_comparison rows;
+    importances: {model name: pd.Series}; calibration: {model name: DataFrame}.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle("Stat-Arb: Baseline vs Self-Learning (out-of-sample)", fontsize=14, fontweight="bold")
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    ax = axes[0, 0]
+    for i, (name, res) in enumerate(variants.items()):
+        lw, c = (2.0, "black") if i == 0 else (1.1, colors[(i - 1) % len(colors)])
+        ax.plot(res.equity_curve.index, res.equity_curve.values, label=name, linewidth=lw, color=c)
+    ax.axhline(0, color="grey", linewidth=0.6)
+    ax.set_title("Equity curves")
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.legend(fontsize=7, loc="best")
+    ax.tick_params(axis="x", rotation=30)
+
+    ax = axes[0, 1]
+    names = [r["name"] for r in rows]
+    y = np.arange(len(rows))
+    ax.barh(y - 0.2, [r["sharpe"] for r in rows], height=0.4, label="Sharpe (ann.)", color="#1f77b4")
+    ax.barh(y + 0.2, [r["dsr"] for r in rows], height=0.4, label="Deflated Sharpe (prob.)", color="#ff7f0e")
+    ax.axvline(0, color="black", linewidth=0.6)
+    ax.axvline(0.95, color="#ff7f0e", linewidth=0.6, linestyle="--")
+    ax.set_yticks(y)
+    ax.set_yticklabels(names, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_title("Sharpe vs deflated Sharpe (DSR bar at 0.95)")
+    ax.legend(fontsize=7)
+
+    ax = axes[1, 0]
+    if importances:
+        imp = pd.DataFrame(importances).fillna(0.0)
+        imp = imp.loc[imp.abs().max(axis=1).sort_values().index]
+        yy = np.arange(len(imp))
+        h = 0.8 / imp.shape[1]
+        for j, col in enumerate(imp.columns):
+            ax.barh(yy + j * h, imp[col].values, height=h, label=col)
+        ax.set_yticks(yy + 0.4 - h / 2)
+        ax.set_yticklabels(imp.index, fontsize=8)
+        ax.axvline(0, color="black", linewidth=0.6)
+        ax.legend(fontsize=7)
+    ax.set_title("OOS permutation importance (drop in AUC)")
+
+    ax = axes[1, 1]
+    ax.plot([0, 1], [0, 1], color="grey", linestyle="--", linewidth=0.8)
+    for name, cal in calibration.items():
+        if len(cal):
+            ax.plot(cal["p_mean"], cal["win_rate"], marker="o", label=name)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Predicted P(profitable)")
+    ax.set_ylabel("Realised win rate")
+    ax.set_title("OOS calibration (triple-barrier labels)")
+    ax.legend(fontsize=7)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    os.makedirs(out_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(out_dir, f"comparison_{timestamp}.png")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
     return out_path

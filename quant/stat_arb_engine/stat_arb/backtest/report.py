@@ -160,3 +160,39 @@ def print_portfolio_report(results) -> None:
     print(f"  Returns are on book capital (no compounding), net of {COST_BPS*1e4:.0f}bp/leg costs.")
     print("=" * 60)
     print()
+
+
+def summary_stats(results) -> dict:
+    """Headline numbers for one PortfolioResults, for side-by-side tables."""
+    dpnl, eq = results.daily_pnl, results.equity_curve
+    trades = [t for r in results.per_pair.values() for t in r.trades]
+    return {
+        "total_return": float(eq.iloc[-1]),
+        "ann_vol"     : float(dpnl.std() * np.sqrt(TRADING_DAYS_PER_YEAR)),
+        "sharpe"      : sharpe_ratio(dpnl),
+        "max_dd"      : max_drawdown(eq),
+        "trades"      : len(trades),
+        "win_rate"    : float(np.mean([t.pnl > 0 for t in trades])) if trades else float("nan"),
+    }
+
+
+def print_comparison(rows: list[dict]) -> None:
+    """
+    Baseline vs learned variants over the same out-of-sample days. Each row
+    is summary_stats() plus "name", "dsr" and optional "note".
+    """
+    print("=" * 96)
+    print("  BASELINE vs SELF-LEARNING  (same pair-periods, same out-of-sample days)")
+    print("=" * 96)
+    print(f"  {'Variant':<24} {'Sharpe':>7} {'DSR':>6} {'Return':>8} {'Vol':>7} "
+          f"{'MaxDD':>8} {'Trades':>7} {'Win%':>6}  Note")
+    print(f"  {'─' * 92}")
+    for r in rows:
+        print(f"  {r['name']:<24} {r['sharpe']:>7.2f} {r['dsr']:>6.2f} {r['total_return']:>8.2%} "
+              f"{r['ann_vol']:>7.2%} {r['max_dd']:>8.2%} {r['trades']:>7d} "
+              f"{r['win_rate'] * 100:>5.1f}%  {r.get('note', '')}")
+    print(f"  {'─' * 92}")
+    print("  DSR = deflated Sharpe ratio: P(true Sharpe > 0) after correcting for every")
+    print("  configuration tried (grid + variants + offline). > 0.95 would be evidence of skill.")
+    print("=" * 96)
+    print()
