@@ -13,23 +13,41 @@ Metrics that actually matter to quant interviewers:
 
 import numpy as np
 import pandas as pd
-from backtest.engine import BacktestResults
+from backtest.engine import BacktestResults, COST_BPS
 
 
 TRADING_DAYS_PER_YEAR = 252
 
 
 def sharpe_ratio(daily_pnl: pd.Series) -> float:
-    pnl = daily_pnl[daily_pnl != 0]
-    if pnl.std() == 0:
+    """
+    Annualised Sharpe over ALL days, flat days included.
+
+    The old version dropped zero-PnL days first. A strategy that's in the
+    market a fraction f of the time then reports roughly 1/sqrt(f) times its
+    true Sharpe (~1.8x at f=0.32) — idle capital is still capital. This now
+    matches the tearsheet's rolling Sharpe, which always used every day.
+    """
+    std = daily_pnl.std()
+    if not np.isfinite(std) or std == 0:
         return 0.0
-    return float((pnl.mean() / pnl.std()) * np.sqrt(TRADING_DAYS_PER_YEAR))
+    return float((daily_pnl.mean() / std) * np.sqrt(TRADING_DAYS_PER_YEAR))
 
 
 def max_drawdown(equity_curve: pd.Series) -> float:
-    roll_max = equity_curve.cummax()
+    """Worst peak-to-trough drop of the cumulative-return curve (a return, e.g. -0.08)."""
+    roll_max = equity_curve.cummax().clip(lower=0.0)   # equity starts at 0
     drawdown = equity_curve - roll_max
     return float(drawdown.min())
+
+
+def _exit_breakdown(trades) -> str:
+    counts = {}
+    for t in trades:
+        counts[t.exit_reason] = counts.get(t.exit_reason, 0) + 1
+    order = ["signal", "stop", "period_end"]
+    keys = order + sorted(k for k in counts if k not in order)
+    return "  ".join(f"{k}={counts[k]}" for k in keys if k in counts)
 
 
 def print_report(ticker_a: str, ticker_b: str, results: BacktestResults) -> None:
@@ -59,13 +77,14 @@ def print_report(ticker_a: str, ticker_b: str, results: BacktestResults) -> None
     profit_factor = (sum(winners) / abs(sum(losers))) if losers else float("inf")
     avg_hold      = np.mean(hold_times)
 
-    print(f"\n  {'Total PnL':<28} ${total_return:>10.4f}")
+    print(f"\n  {'Total Return':<28} {total_return:>10.2%}")
     print(f"  {'Sharpe Ratio':<28} {sharpe:>10.2f}")
-    print(f"  {'Max Drawdown':<28} ${mdd:>10.4f}")
+    print(f"  {'Max Drawdown':<28} {mdd:>10.2%}")
     print(f"  {'Total Trades':<28} {len(trades):>10d}")
+    print(f"  {'Exits':<28} {_exit_breakdown(trades)}")
     print(f"  {'Win Rate':<28} {win_rate:>9.1f}%")
-    print(f"  {'Avg Win':<28} ${avg_win:>10.4f}")
-    print(f"  {'Avg Loss':<28} ${avg_loss:>10.4f}")
+    print(f"  {'Avg Win':<28} {avg_win:>10.3%}")
+    print(f"  {'Avg Loss':<28} {avg_loss:>10.3%}")
     print(f"  {'Profit Factor':<28} {profit_factor:>10.2f}")
     print(f"  {'Avg Hold Time':<28} {avg_hold:>8.1f} days")
 
@@ -83,11 +102,11 @@ def print_report(ticker_a: str, ticker_b: str, results: BacktestResults) -> None
             f" {direction:<8}"
             f" {t.entry_z:>8.2f}"
             f" {t.exit_z:>8.2f}"
-            f" ${t.pnl:>9.4f}"
+            f" {t.pnl:>9.3%}"
         )
 
     print(f"\n  {'─' * 50}")
-    print(f"  Final equity: ${eq.iloc[-1]:.4f}  (start: $0.0000)")
+    print(f"  Cumulative return on capital: {eq.iloc[-1]:.2%}")
     print("=" * 60)
     print("\n  Tip: Plot eq.curve with matplotlib to visualise the equity curve.")
     print("  Tip: Increase ENTRY_THRESHOLD in main.py to trade less frequently.")
@@ -108,7 +127,12 @@ def print_portfolio_report(results) -> None:
 
     n_pair_periods = len(results.per_pair)
     n_distinct_pairs = len({(a, b) for (a, b, _) in results.per_pair.keys()})
-    total_trades = sum(len(r.trades) for r in results.per_pair.values())
+    all_trades = [t for r in results.per_pair.values() for t in r.trades]
+    total_trades = len(all_trades)
+    win_rate = np.mean([t.pnl > 0 for t in all_trades]) * 100 if all_trades else float("nan")
+    ann_ret = dpnl.mean() * TRADING_DAYS_PER_YEAR
+    ann_vol = dpnl.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    pct_in_market = (dpnl != 0).mean() * 100
 
     # Average pairwise correlation, off-diagonal only
     if corr.shape[0] > 1:
@@ -120,14 +144,19 @@ def print_portfolio_report(results) -> None:
     print("=" * 60)
     print("  PORTFOLIO BACKTEST RESULTS")
     print("=" * 60)
-    print(f"\n  {'Total PnL':<28} ${eq.iloc[-1]:>10.4f}")
-    print(f"  {'Sharpe Ratio':<28} {sharpe_ratio(dpnl):>10.2f}")
-    print(f"  {'Max Drawdown':<28} ${max_drawdown(eq):>10.4f}")
+    print(f"\n  {'Total Return':<28} {eq.iloc[-1]:>10.2%}")
+    print(f"  {'Annualised Return':<28} {ann_ret:>10.2%}")
+    print(f"  {'Annualised Vol':<28} {ann_vol:>10.2%}")
+    print(f"  {'Sharpe Ratio (all days)':<28} {sharpe_ratio(dpnl):>10.2f}")
+    print(f"  {'Max Drawdown':<28} {max_drawdown(eq):>10.2%}")
+    print(f"  {'Days in Market':<28} {pct_in_market:>9.1f}%")
     print(f"  {'Distinct Pairs Traded':<28} {n_distinct_pairs:>10d}")
     print(f"  {'Pair-Periods (walk-fwd)':<28} {n_pair_periods:>10d}")
     print(f"  {'Total Trades':<28} {total_trades:>10d}")
+    print(f"  {'Exits':<28} {_exit_breakdown(all_trades)}")
+    print(f"  {'Win Rate (net of costs)':<28} {win_rate:>9.1f}%")
     print(f"  {'Avg Pairwise PnL Corr':<28} {avg_corr:>10.2f}")
     print(f"\n  {'─' * 50}")
-    print(f"  Final equity: ${eq.iloc[-1]:.4f}  (start: $0.0000)")
+    print(f"  Returns are on book capital (no compounding), net of {COST_BPS*1e4:.0f}bp/leg costs.")
     print("=" * 60)
     print()

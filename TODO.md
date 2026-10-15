@@ -3,7 +3,7 @@
 ## Quant
 - [x] Finish/continue `stat_arb_engine` — now walk-forward, multi-pair, vol-targeted, with a portfolio tearsheet
 - [x] Fix the stray `{data,signals,backtest,utils}` literal folder in `quant/stat_arb_engine/stat_arb/`
-- [ ] `stat_arb_engine`: add stop-losses (exit if z-score blows past 3.5σ) and Kelly-sizing comparison
+- [ ] `stat_arb_engine`: Kelly-sizing comparison (stop-losses at |z|>3.5 done)
 - [ ] Update `quant/EDGARX_README.md` — it documents `edgar_scraper.py`/`analyze_10k.py` but the code now lives combined in `EDGARX.py`
 - [ ] Options strategy backtester using the `vol_surface.py` BS pricer
 - [ ] Monte Carlo exotic-option pricer (revive/extend `GBM.py` for Asian/barrier options)

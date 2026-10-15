@@ -31,6 +31,7 @@ class PortfolioResults:
     per_pair       : dict          # (ticker_a, ticker_b, period_start) -> BacktestResults
     pair_pnl       : pd.DataFrame  # daily PnL per pair-period, columns = pair labels
     pair_pnl_corr  : pd.DataFrame  # correlation matrix of pair_pnl columns
+    kalman_params  : dict = field(default_factory=dict)  # label -> fitted Kalman params
 
 
 def run_portfolio_backtest(
@@ -39,42 +40,71 @@ def run_portfolio_backtest(
     lookback_window : int = 60,
     entry_threshold : float = 2.0,
     exit_threshold  : float = 0.5,
+    stop_threshold  : float | None = 3.5,
     target_daily_vol: float = 0.01,
+    signal          : str = "rolling",
+    train_window    : int = 252,
 ) -> PortfolioResults:
     """
     Run the full pipeline (Kalman hedge ratio -> z-score -> vol-target sizing
     -> backtest) for every PairPeriod in `pair_schedule`, restricted to each
     period's own active date range, then sum them into one portfolio.
 
-    Each pair-period is fit independently on prices up to its own period —
-    consistent with how `pair_schedule` was generated (see
-    signals/walkforward.py), so nothing here re-introduces look-ahead.
+    Each pair-period's Kalman filter is fit (centring, OLS seed, MLE noise
+    parameters) on that pair's own selection window — the `train_window`
+    days before period_start, the same data walk-forward used to pick it —
+    and then filtered causally through the active period. So nothing here
+    re-introduces look-ahead, and the z-score / vol warm-ups are complete by
+    the first tradeable day.
+
+    signal: "rolling"    -> rolling z-score of the spread (lookback_window)
+            "innovation" -> Kalman innovation z = e / sqrt(S)
+
+    PnL is a return on book capital: each pair's daily_pnl is its return on
+    the whole book, so the portfolio return is their sum.
     """
     per_pair  : dict = {}
     pair_pnl_cols: dict[str, pd.Series] = {}
+    kalman_params: dict = {}
 
     for pp in pair_schedule:
         label = f"{pp.ticker_a}/{pp.ticker_b} [{pp.period_start.date()}]"
 
-        # Fit hedge ratio + z-score using history up to (and including) this
-        # pair's active period, then slice down to just the active dates —
-        # the Kalman/z-score warm-up naturally uses only causal, in-window data.
-        series_a = prices.loc[:pp.period_end, pp.ticker_a]
-        series_b = prices.loc[:pp.period_end, pp.ticker_b]
+        if pp.train_start is not None:
+            window = prices.loc[pp.train_start:pp.period_end]
+        else:
+            start_pos = max(0, prices.index.get_loc(pp.period_start) - train_window)
+            window = prices.loc[prices.index[start_pos]:pp.period_end]
+        series_a = window[pp.ticker_a]
+        series_b = window[pp.ticker_b]
+        train_size = int((window.index < pp.period_start).sum())
 
         kalman = KalmanHedgeRatio()
-        hedge_ratios, spreads = kalman.fit(series_a, series_b)
-        zscores = compute_zscore(spreads, window=lookback_window)
-        size = vol_target_size(spreads, target_daily_vol=target_daily_vol).fillna(1.0)
+        kf = kalman.fit(series_a, series_b, train_size=train_size)
+        kalman_params[label] = kalman.fitted_params
 
-        active = (series_a.index >= pp.period_start) & (series_a.index <= pp.period_end)
+        if signal == "rolling":
+            zscores = compute_zscore(kf.spread, window=lookback_window)
+        elif signal == "innovation":
+            zscores = kf.innovation_z
+        else:
+            raise ValueError(f"unknown signal: {signal!r}")
+        size = vol_target_size(series_a, series_b, kf.hedge_ratio, target_daily_vol=target_daily_vol)
+
+        # Start the backtest one day BEFORE period_start, so day-1 decisions
+        # can use the prior close's z / hedge / size (the engine always acts
+        # on [t-1]). The engine can't enter on its own first row, so no
+        # position is ever opened before period_start.
+        first = max(0, train_size - 1)
+        active = slice(first, None)
 
         results = run_backtest(
-            series_a[active], series_b[active],
-            hedge_ratios[active], zscores[active],
+            series_a.iloc[active], series_b.iloc[active],
+            kf.hedge_ratio.iloc[active], zscores.iloc[active],
             entry_threshold=entry_threshold,
             exit_threshold=exit_threshold,
-            size=size[active],
+            stop_threshold=stop_threshold,
+            size=size.iloc[active],
         )
 
         per_pair[(pp.ticker_a, pp.ticker_b, pp.period_start)] = results
@@ -83,7 +113,10 @@ def run_portfolio_backtest(
     if not pair_pnl_cols:
         raise ValueError("No pair-periods to backtest — pair_schedule was empty.")
 
-    pair_pnl = pd.concat(pair_pnl_cols, axis=1).fillna(0.0)
+    # Reindex onto the full calendar so days with nothing active count as
+    # flat (0 return) days — otherwise Sharpe/vol only see "in-market" days.
+    calendar = prices.loc[min(pp.period_start for pp in pair_schedule):].index
+    pair_pnl = pd.concat(pair_pnl_cols, axis=1).reindex(calendar).fillna(0.0)
     daily_pnl = pair_pnl.sum(axis=1).rename("daily_pnl")
     equity_curve = daily_pnl.cumsum().rename("equity")
     pair_pnl_corr = pair_pnl.corr()
@@ -94,4 +127,5 @@ def run_portfolio_backtest(
         per_pair      = per_pair,
         pair_pnl      = pair_pnl,
         pair_pnl_corr = pair_pnl_corr,
+        kalman_params = kalman_params,
     )

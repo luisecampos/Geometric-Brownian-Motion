@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")   # headless-safe: never try to open a GUI window
 import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
 
 TRADING_DAYS_PER_YEAR = 252
 ROLLING_SHARPE_WINDOW = 60
@@ -46,7 +47,8 @@ def plot_tearsheet(results, out_dir: str = "outputs") -> str:
     ax.plot(eq.index, eq.values, color="#1f77b4", linewidth=1.2)
     ax.axhline(0, color="black", linewidth=0.6)
     ax.set_title("Equity Curve")
-    ax.set_ylabel("Cumulative PnL ($)")
+    ax.set_ylabel("Cumulative return on capital")
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
     ax.tick_params(axis="x", rotation=30)
 
     # 2. Rolling Sharpe
@@ -59,11 +61,12 @@ def plot_tearsheet(results, out_dir: str = "outputs") -> str:
 
     # 3. Drawdown (underwater chart)
     ax = axes[1, 0]
-    roll_max = eq.cummax()
+    roll_max = eq.cummax().clip(lower=0.0)   # equity starts at 0
     drawdown = eq - roll_max
     ax.fill_between(drawdown.index, drawdown.values, 0, color="#d62728", alpha=0.6)
     ax.set_title("Drawdown")
-    ax.set_ylabel("Drawdown ($)")
+    ax.set_ylabel("Drawdown (return on capital)")
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
     ax.tick_params(axis="x", rotation=30)
 
     # 4. Pair PnL correlation heatmap

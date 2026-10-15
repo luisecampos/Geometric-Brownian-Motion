@@ -7,10 +7,12 @@ sizing — the same building blocks used on real quant research desks.
 
 Pipeline:
   1. Fetch price data for the ticker universe
-  2. Walk-forward: re-test cointegration on a rolling window, building a
+  2. Walk-forward: re-test cointegration on a rolling window (with a
+     multiple-testing correction and a half-life filter), building a
      schedule of which pairs are tradeable in which period (no look-ahead)
-  3. For every pair-period: dynamic hedge ratio (Kalman), z-score signal,
-     vol-targeted size, and a day-by-day backtest
+  3. For every pair-period: dynamic log-space hedge ratio (Kalman, noise
+     fit by MLE on the selection window), z-score signal, vol-targeted
+     size, and a day-by-day backtest with stop-loss, returns on capital
   4. Combine every pair-period into one portfolio, track correlation between
      pairs' daily PnL
   5. Report portfolio performance and save a tearsheet PNG
@@ -57,8 +59,14 @@ TEST_WINDOW       = 63    # trading days each pair-selection stays active (~1 qu
 LOOKBACK_WINDOW   = 60    # z-score rolling window
 ENTRY_THRESHOLD   = 2.0
 EXIT_THRESHOLD    = 0.5
-PVALUE_CUTOFF     = 0.05
-TARGET_DAILY_VOL  = 0.01  # per-pair vol target used for position sizing
+STOP_THRESHOLD    = 3.5   # |z| beyond this = pair likely broke; exit and wait
+PVALUE_CUTOFF     = 0.05  # FDR level under "bh", family-wise level under "bonferroni"
+MULTIPLE_TESTING  = "bh"  # "bh" | "bonferroni" | None — 105 pairs/quarter need a correction
+MIN_HALF_LIFE     = 5     # days — faster than this is usually noise / bid-ask bounce
+MAX_HALF_LIFE     = 60    # days — slower than this won't revert inside a 63d window
+SIGNAL            = "rolling"  # "rolling" z-score of the spread | "innovation" = Kalman e/sqrt(S)
+TARGET_DAILY_VOL  = 0.0025  # per-pair daily vol target, as a fraction of book capital
+                          # (~10 uncorrelated pairs on at once -> ~0.8%/day, ~12%/yr for the book)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -79,6 +87,10 @@ def main():
         train_window=TRAIN_WINDOW,
         test_window=TEST_WINDOW,
         pvalue_cutoff=PVALUE_CUTOFF,
+        multiple_testing=MULTIPLE_TESTING,
+        min_half_life=MIN_HALF_LIFE,
+        max_half_life=MAX_HALF_LIFE,
+        verbose=True,
     )
     if not schedule:
         print("      No cointegrated pairs found in any window. Try a bigger/different universe.")
@@ -86,14 +98,17 @@ def main():
     n_distinct = len({(pp.ticker_a, pp.ticker_b) for pp in schedule})
     print(f"      {len(schedule)} pair-period(s) across {n_distinct} distinct pair(s).")
 
-    print(f"\n[3/4] Backtesting every pair-period (vol target={TARGET_DAILY_VOL:.1%}/day)...")
+    print(f"\n[3/4] Backtesting every pair-period (vol target={TARGET_DAILY_VOL:.2%}/day)...")
     results = run_portfolio_backtest(
         prices,
         schedule,
         lookback_window=LOOKBACK_WINDOW,
         entry_threshold=ENTRY_THRESHOLD,
         exit_threshold=EXIT_THRESHOLD,
+        stop_threshold=STOP_THRESHOLD,
         target_daily_vol=TARGET_DAILY_VOL,
+        signal=SIGNAL,
+        train_window=TRAIN_WINDOW,
     )
 
     print_portfolio_report(results)

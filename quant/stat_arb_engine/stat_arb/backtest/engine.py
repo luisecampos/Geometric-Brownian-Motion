@@ -2,26 +2,45 @@
 backtest/engine.py
 ------------------
 Tick through history day by day, open/close positions based on z-score
-thresholds, and track PnL.
+thresholds, and track PnL as a RETURN ON CAPITAL.
 
 Position logic:
   - We are always either FLAT, LONG_SPREAD, or SHORT_SPREAD
   - LONG_SPREAD  = long A, short B*hedge_ratio  (bet spread widens back up)
   - SHORT_SPREAD = short A, long B*hedge_ratio  (bet spread narrows back down)
 
-PnL is computed in dollar terms assuming $1 notional per leg, scaled by an
-optional per-day `size` multiplier (see signals/sizing.py for vol-targeted
-sizing — defaults to flat $1 notional if no size series is passed).
-Transaction costs are included (2bps per trade, realistic for equities).
+Sizing:
+  `size[t]` is gross notional as a fraction of book capital (see
+  signals/sizing.py), split across the legs by the hedge ratio. At entry the
+  dollar legs are converted to SHARE counts, which are then held fixed until
+  exit — no silent daily rebalancing, so the only trading costs are the
+  entry and exit trades actually modelled here. Daily PnL is
+  sum(shares * price change), i.e. a return on $1 of capital.
 
-Note on look-ahead bias:
-  We use z[t] to decide, then execute at close price on day t+1.
-  This is conservative but realistic — you see EOD data, trade next open.
+Costs: COST_BPS per leg on the dollar notional traded, at entry AND exit,
+  both included in Trade.pnl.
+
+Timing (no look-ahead):
+  Every decision — entry, exit, stop — uses information up to the close of
+  t-1 (z[t-1], hedge_ratio[t-1], size[t-1]) and executes at the close of t.
+  The old engine entered on z[t-1] but exited on z[t] at the same close, and
+  marked PnL with beta[t], which had already been updated with day t's
+  prices. Both are fixed: entry/exit share one rule, and the hedge is frozen
+  at entry.
+
+Exits:
+  - "signal"     : |z| < exit_threshold (spread reverted), or z unavailable
+  - "stop"       : |z| > stop_threshold (spread blew out — pair likely broke)
+  - "period_end" : force-closed on the last day of the active window, costs
+                   charged. Previously these positions just vanished from the
+                   trade log and never paid their exit cost.
+  After a stop, no re-entry until |z| falls back inside the entry band, so a
+  broken pair doesn't get re-entered the next morning at |z|=3.6.
 """
 
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 FLAT         =  0
@@ -38,14 +57,18 @@ class Trade:
     direction   : int    # LONG_SPREAD or SHORT_SPREAD
     entry_z     : float
     exit_z      : float
-    pnl         : float
+    pnl         : float  # return on capital, net of entry + exit costs
+    exit_reason : str   = "signal"   # "signal" | "stop" | "period_end"
+    hedge_ratio : float = float("nan")   # beta frozen at entry
+    gross       : float = float("nan")   # gross notional / capital at entry
+    holding_days: int   = 0              # trading days held
 
 
 @dataclass
 class BacktestResults:
-    equity_curve : pd.Series
+    equity_curve : pd.Series     # cumulative return on capital
     trades       : list[Trade]
-    daily_pnl    : pd.Series
+    daily_pnl    : pd.Series     # daily return on capital
 
 
 def run_backtest(
@@ -55,92 +78,111 @@ def run_backtest(
     zscores         : pd.Series,
     entry_threshold : float = 2.0,
     exit_threshold  : float = 0.5,
+    stop_threshold  : float | None = 3.5,
     size            : pd.Series = None,
+    cost_bps        : float = COST_BPS,
 ) -> BacktestResults:
     """
     Simulate the pairs trading strategy day by day.
 
     Args:
         series_a/b      : price series for each leg
-        hedge_ratios    : Kalman-estimated beta each day
-        zscores         : rolling z-score of spread
+        hedge_ratios    : log-space (dollar) hedge ratio each day, as of that
+                          day's close
+        zscores         : z-score of the spread, as of each day's close
         entry_threshold : |z| above which we enter a trade
         exit_threshold  : |z| below which we exit a trade
-        size            : optional per-day notional multiplier (e.g. from
-                          signals.sizing.vol_target_size). Defaults to flat
-                          $1 notional (multiplier of 1.0) every day.
+        stop_threshold  : |z| above which an open trade is stopped out (and
+                          new entries are refused). None disables the stop.
+        size            : gross notional / capital per day (e.g. from
+                          signals.sizing.vol_target_size). Defaults to 1.0.
+        cost_bps        : one-way cost per leg, as a fraction of notional
 
     Returns:
-        BacktestResults with equity curve, trade log, and daily PnL
+        BacktestResults with equity curve, trade log, and daily returns.
+        Any position open on the last day is force-closed there.
     """
-    dates      = series_a.index
-    a          = series_a.values
-    b          = series_b.values
-    beta       = hedge_ratios.values
-    z          = zscores.values
-    sz         = size.values if size is not None else np.ones(len(dates))
+    dates = series_a.index
+    n     = len(dates)
+    a     = series_a.values.astype(float)
+    b     = series_b.values.astype(float)
+    beta  = hedge_ratios.values.astype(float)
+    z     = zscores.values.astype(float)
+    sz    = size.values.astype(float) if size is not None else np.ones(n)
+    stop  = np.inf if stop_threshold is None else stop_threshold
 
-    position   = FLAT
-    entry_idx  = None
-    entry_z    = None
-    daily_pnl  = np.zeros(len(dates))
-    trades     = []
+    position    = FLAT
+    sh_a = sh_b = 0.0          # shares held, per $1 of capital (signed)
+    entry_idx   = None
+    entry_z     = np.nan
+    entry_beta  = np.nan
+    entry_gross = np.nan
+    stopped_out = False
+    daily_pnl   = np.zeros(n)
+    trades      = []
 
-    for t in range(1, len(dates)):
-        if np.isnan(z[t - 1]):
+    for t in range(1, n):
+        # ── Mark open position to market over (t-1, t] ───────────────────
+        if position != FLAT:
+            daily_pnl[t] += sh_a * (a[t] - a[t - 1]) + sh_b * (b[t] - b[t - 1])
+
+        signal_z = z[t - 1]   # everything below is decided on yesterday's close
+        last_day = t == n - 1
+
+        # ── Exit logic (executes at close t) ─────────────────────────────
+        if position != FLAT:
+            reason = None
+            if np.isnan(signal_z) or abs(signal_z) < exit_threshold:
+                reason = "signal"
+            elif abs(signal_z) > stop:
+                reason = "stop"
+            elif last_day:
+                reason = "period_end"
+
+            if reason is not None:
+                daily_pnl[t] -= cost_bps * (abs(sh_a) * a[t] + abs(sh_b) * b[t])
+                trades.append(Trade(
+                    entry_date   = dates[entry_idx],
+                    exit_date    = dates[t],
+                    direction    = position,
+                    entry_z      = entry_z,
+                    exit_z       = signal_z,
+                    pnl          = float(daily_pnl[entry_idx:t + 1].sum()),
+                    exit_reason  = reason,
+                    hedge_ratio  = entry_beta,
+                    gross        = entry_gross,
+                    holding_days = t - entry_idx,
+                ))
+                stopped_out = reason == "stop"
+                position, sh_a, sh_b, entry_idx = FLAT, 0.0, 0.0, None
+            continue   # no same-day flip; re-entry is considered tomorrow
+
+        # ── Entry logic (executes at close t) ────────────────────────────
+        if last_day or np.isnan(signal_z):
+            continue
+        if stopped_out:
+            if abs(signal_z) > entry_threshold:
+                continue
+            stopped_out = False
+
+        gross, hedge = sz[t - 1], beta[t - 1]
+        if not (entry_threshold < abs(signal_z) <= stop):
+            continue
+        if not (np.isfinite(gross) and gross > 0 and np.isfinite(hedge)):
             continue
 
-        prev_z = z[t - 1]   # signal from yesterday
-        curr_z = z[t]
+        # z > 0: spread rich -> short spread (short A, long B); z < 0: the reverse
+        position = SHORT_SPREAD if signal_z > 0 else LONG_SPREAD
+        notional_a = position * gross / (1.0 + abs(hedge))
+        notional_b = -position * gross * hedge / (1.0 + abs(hedge))
+        sh_a, sh_b = notional_a / a[t], notional_b / b[t]
 
-        # Daily PnL for open position
-        if position != FLAT:
-            da = a[t] - a[t - 1]   # change in price A
-            db = b[t] - b[t - 1]   # change in price B
+        daily_pnl[t] -= cost_bps * (abs(notional_a) + abs(notional_b))
+        entry_idx, entry_z     = t, signal_z
+        entry_beta, entry_gross = hedge, gross
 
-            if position == LONG_SPREAD:
-                daily_pnl[t] = sz[t] * (da - beta[t] * db)
-            else:
-                daily_pnl[t] = sz[t] * (-da + beta[t] * db)
-
-        # ── Entry logic ───────────────────────────────────────────
-        if position == FLAT:
-            if prev_z > entry_threshold:
-                # Spread is high → short spread (short A, long B)
-                position  = SHORT_SPREAD
-                entry_idx = t
-                entry_z   = prev_z
-                # Pay transaction cost on both legs, scaled by size
-                daily_pnl[t] -= sz[t] * COST_BPS * 2
-
-            elif prev_z < -entry_threshold:
-                # Spread is low → long spread (long A, short B)
-                position  = LONG_SPREAD
-                entry_idx = t
-                entry_z   = prev_z
-                daily_pnl[t] -= sz[t] * COST_BPS * 2
-
-        # ── Exit logic ────────────────────────────────────────────
-        elif abs(curr_z) < exit_threshold or np.isnan(curr_z):
-            trade_pnl = daily_pnl[entry_idx:t + 1].sum()
-            trades.append(Trade(
-                entry_date = dates[entry_idx],
-                exit_date  = dates[t],
-                direction  = position,
-                entry_z    = entry_z,
-                exit_z     = curr_z,
-                pnl        = trade_pnl,
-            ))
-            daily_pnl[t] -= sz[t] * COST_BPS * 2   # exit cost
-            position = FLAT
-            entry_idx = None
-
-    equity_curve = pd.Series(
-        np.cumsum(daily_pnl),
-        index=dates,
-        name="equity",
-    )
     daily_pnl_series = pd.Series(daily_pnl, index=dates, name="daily_pnl")
+    equity_curve     = daily_pnl_series.cumsum().rename("equity")
 
     return BacktestResults(
         equity_curve = equity_curve,
