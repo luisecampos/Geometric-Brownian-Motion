@@ -22,14 +22,54 @@ import pandas as pd
 from itertools import combinations
 from statsmodels.tsa.stattools import coint
 
+from signals.cache import parallel_map
+
+
+def _coint_chunk(args):
+    """Worker: Engle-Granger on a block of (i, j) column pairs of `values`."""
+    values, idx_pairs = args
+    out = []
+    for i, j in idx_pairs:
+        # coint() runs Engle-Granger: returns (test_stat, p_value, crit_values)
+        stat, pval, _ = coint(values[:, i], values[:, j])
+        out.append((i, j, float(stat), float(pval)))
+    return out
+
+
+def coint_tests(
+    prices : pd.DataFrame,
+    pairs  : list[tuple[str, str]] | None = None,
+    n_jobs : int = 1,
+    chunk  : int = 150,
+) -> dict[tuple[str, str], tuple[float, float]]:
+    """
+    Engle-Granger test for each pair in `pairs` (default: every pair of
+    columns). Returns {(ticker_a, ticker_b): (adf_stat, p_value)}.
+    n_jobs > 1 spreads the tests over a process pool.
+    """
+    tickers = prices.columns.tolist()
+    if pairs is None:
+        pairs = list(combinations(tickers, 2))
+    pos = {t: k for k, t in enumerate(tickers)}
+    values = prices.values.astype(float)
+    idx_pairs = [(pos[a], pos[b]) for a, b in pairs]
+    blocks = [(values, idx_pairs[k:k + chunk]) for k in range(0, len(idx_pairs), chunk)]
+    out = {}
+    for block in parallel_map(_coint_chunk, blocks, n_jobs):
+        for i, j, stat, pval in block:
+            out[(tickers[i], tickers[j])] = (stat, pval)
+    return out
+
 
 def find_cointegrated_pairs(
     prices: pd.DataFrame,
     pvalue_cutoff: float | None = 0.05,
     verbose: bool = True,
+    pairs: list[tuple[str, str]] | None = None,
+    n_jobs: int = 1,
 ) -> list[tuple[str, str, float]]:
     """
-    Test every pair of tickers for cointegration.
+    Test every pair of tickers (or just `pairs`) for cointegration.
 
     Returns a list of (ticker_a, ticker_b, p_value) tuples sorted by p-value,
     filtered to those below pvalue_cutoff. pvalue_cutoff=None returns every
@@ -39,22 +79,14 @@ def find_cointegrated_pairs(
     verbose=False silences progress printing — useful when this is called
     many times in a loop (e.g. walk-forward re-fitting every rebalance date).
     """
-    tickers = prices.columns.tolist()
-    results = []
-
-    total = len(list(combinations(tickers, 2)))
+    if pairs is None:
+        pairs = list(combinations(prices.columns.tolist(), 2))
     if verbose:
-        print(f"      Testing {total} pairs...", end="", flush=True)
+        print(f"      Testing {len(pairs)} pairs...", end="", flush=True)
 
-    for t1, t2 in combinations(tickers, 2):
-        s1 = prices[t1].values
-        s2 = prices[t2].values
-
-        # coint() runs Engle-Granger: returns (test_stat, p_value, crit_values)
-        _, pval, _ = coint(s1, s2)
-
-        if pvalue_cutoff is None or pval < pvalue_cutoff:
-            results.append((t1, t2, pval))
+    tests = coint_tests(prices, pairs, n_jobs)
+    results = [(a, b, p) for (a, b), (_, p) in tests.items()
+               if pvalue_cutoff is None or p < pvalue_cutoff]
 
     if verbose:
         print(" done.")

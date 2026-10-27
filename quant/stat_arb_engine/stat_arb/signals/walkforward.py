@@ -32,7 +32,17 @@ Half-life filter:
   horizon inside a 63-day trading window. Pairs whose training-window spread
   half-life falls outside [min_half_life, max_half_life] are dropped.
 
-Tests run on LOG prices, matching the log-space Kalman hedge.
+Sector restriction:
+  On a wide universe, testing every pair is both slow (C(300, 2) ~ 45,000
+  tests per window) and mostly pointless: a utility and a chip maker can
+  pass Engle-Granger by chance, but there is no economic reason for the
+  spread to revert. Passing `sectors` (ticker -> sector) restricts the
+  candidate family to same-sector pairs, and the multiple-testing correction
+  is applied to that family.
+
+Tests run on LOG prices, matching the log-space Kalman hedge. With
+`n_jobs` > 1 they run in a process pool, and with `cache_dir` each window's
+results are cached on disk, keyed by a hash of the window's prices.
 """
 
 from __future__ import annotations
@@ -41,7 +51,10 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 
-from signals.cointegration import find_cointegrated_pairs, spread_half_life
+from itertools import combinations
+
+from signals.cache import DiskCache, fingerprint, parallel_map
+from signals.cointegration import _coint_chunk, spread_half_life
 
 
 @dataclass
@@ -53,6 +66,7 @@ class PairPeriod:
     period_end   : pd.Timestamp   # last tradeable date, exclusive of next period
     train_start  : pd.Timestamp = None   # first date of the selection window
     half_life    : float = float("nan")  # training-window spread half-life (days)
+    adf_stat     : float = float("nan")  # Engle-Granger ADF statistic on the selection window
 
 
 def select_pairs(
@@ -93,6 +107,9 @@ def generate_pair_schedule(
     min_half_life    : float = 5.0,
     max_half_life    : float = 60.0,
     verbose          : bool  = False,
+    sectors          : dict | None = None,
+    n_jobs           : int = 1,
+    cache_dir        : str | None = None,
 ) -> list[PairPeriod]:
     """
     Roll a `train_window`-day cointegration test forward in `test_window`-day
@@ -108,23 +125,71 @@ def generate_pair_schedule(
     Returns a flat list of PairPeriod, one entry per (pair, active window).
     Multiple pairs can be active in the same period; the same pair can
     reappear in a later period if it re-qualifies.
+
+    sectors: optional {ticker: sector}; only same-sector pairs are tested.
     """
     prices = prices[universe].dropna()
     log_px = np.log(prices)
     dates  = prices.index
     n      = len(dates)
 
-    schedule: list[PairPeriod] = []
+    tickers = log_px.columns.tolist()
+    if sectors is None:
+        pairs = list(combinations(tickers, 2))
+    else:
+        pairs = [(a, b) for a, b in combinations(tickers, 2)
+                 if sectors.get(a) is not None and sectors.get(a) == sectors.get(b)]
+    pos = {t: k for k, t in enumerate(tickers)}
 
+    # Every window's train slice, then all Engle-Granger tests in one pass:
+    # cached windows are read back, the rest go to one process pool.
+    windows = []
     start = train_window
     while start < n:
         end = min(start + test_window, n)
+        windows.append((start, end))
+        start = end
 
+    cache = DiskCache(cache_dir, "coint")
+    tests: dict = {}
+    todo, blocks = [], []
+    for start, end in windows:
+        values = log_px.values[start - train_window : start]
+        key = fingerprint(values, tickers, pairs)
+        if cache.get(key) is not None:
+            tests[start] = cache.get(key)
+            continue
+        idx_pairs = [(pos[a], pos[b]) for a, b in pairs]
+        nb = 0
+        for k in range(0, len(idx_pairs), 150):
+            blocks.append((values, idx_pairs[k:k + 150]))
+            nb += 1
+        todo.append((start, key, nb))
+    if blocks:
+        if verbose:
+            print(f"      Running {len(todo) * len(pairs)} Engle-Granger tests "
+                  f"({len(pairs)} pairs x {len(todo)} uncached windows, {n_jobs} process(es))...")
+        out = parallel_map(_coint_chunk, blocks, n_jobs)
+        k = 0
+        for start, key, nb in todo:
+            res = {}
+            for block in out[k:k + nb]:
+                for i, j, stat, pval in block:
+                    res[(tickers[i], tickers[j])] = (stat, pval)
+            k += nb
+            tests[start] = res
+            cache.put(key, res)
+        cache.save()
+
+    schedule: list[PairPeriod] = []
+
+    for start, end in windows:
         train_slice  = log_px.iloc[start - train_window : start]
         period_start = dates[start]
         period_end   = dates[end - 1]
 
-        all_pvals = find_cointegrated_pairs(train_slice, pvalue_cutoff=None, verbose=False)
+        res       = tests[start]
+        all_pvals = sorted(((a, b, p) for (a, b), (_, p) in res.items()), key=lambda x: x[2])
         passed    = select_pairs(all_pvals, pvalue_cutoff, multiple_testing)
 
         kept = 0
@@ -141,6 +206,7 @@ def generate_pair_schedule(
                 period_end   = period_end,
                 train_start  = dates[start - train_window],
                 half_life    = hl,
+                adf_stat     = res[(ticker_a, ticker_b)][0],
             ))
 
         if verbose:
@@ -148,7 +214,5 @@ def generate_pair_schedule(
             print(f"      {period_start.date()}: {raw:>3d} raw p<{pvalue_cutoff}"
                   f"  -> {len(passed):>2d} after {multiple_testing or 'no'} correction"
                   f"  -> {kept:>2d} after half-life filter")
-
-        start = end
 
     return schedule

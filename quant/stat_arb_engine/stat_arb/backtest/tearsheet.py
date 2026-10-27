@@ -38,7 +38,16 @@ def plot_tearsheet(results, out_dir: str = "outputs") -> str:
     """
     eq   = results.equity_curve
     dpnl = results.daily_pnl
-    corr = results.pair_pnl_corr
+    # With thousands of pair-periods a full heatmap is unreadable (and slow
+    # to build): show the most active ones, by gross PnL.
+    max_heat = 60
+    heat_title = "Pair PnL Correlation"
+    if results.pair_pnl.shape[1] > max_heat:
+        top = results.pair_pnl.abs().sum().nlargest(max_heat).index
+        corr = results.pair_pnl[top].corr()
+        heat_title += f" (top {max_heat} of {results.pair_pnl.shape[1]} by gross PnL)"
+    else:
+        corr = results.pair_pnl_corr
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
     fig.suptitle("Stat-Arb Portfolio Tearsheet", fontsize=14, fontweight="bold")
@@ -85,7 +94,7 @@ def plot_tearsheet(results, out_dir: str = "outputs") -> str:
         ax.set_yticks(ticks)
         ax.set_yticklabels(labels, fontsize=6)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title("Pair PnL Correlation")
+        ax.set_title(heat_title, fontsize=9)
     else:
         ax.text(0.5, 0.5, "Only one pair-period\n(no correlation to show)",
                 ha="center", va="center")

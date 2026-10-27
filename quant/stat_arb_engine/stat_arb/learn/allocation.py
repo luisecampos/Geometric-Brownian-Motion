@@ -57,11 +57,13 @@ def thompson_multipliers(
 
         sigma2 = max(float(done["reward"].var(ddof=1)), 1e-12)
         tau2 = sigma2
+        g = done.groupby("pair")["reward"]
+        stats = dict(zip(g.sum().index, zip(g.sum().values, g.count().values)))
         post_mean, post_sd = [], []
         for p in active:
-            r = done.loc[done["pair"] == (p.pp.ticker_a, p.pp.ticker_b), "reward"]
-            var = 1.0 / (1.0 / tau2 + len(r) / sigma2)
-            post_mean.append(var * r.sum() / sigma2)
+            r_sum, r_n = stats.get((p.pp.ticker_a, p.pp.ticker_b), (0.0, 0))
+            var = 1.0 / (1.0 / tau2 + r_n / sigma2)
+            post_mean.append(var * r_sum / sigma2)
             post_sd.append(np.sqrt(var))
         draws = rng.normal(post_mean, post_sd, size=(n_draws, len(active)))
         p_best = np.bincount(draws.argmax(axis=1), minlength=len(active)) / n_draws

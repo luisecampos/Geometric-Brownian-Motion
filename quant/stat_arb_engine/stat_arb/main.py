@@ -31,7 +31,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import os
 
+import numpy as np
+
 from data.fetch import fetch_prices
+from data import universe as wide
+from signals.cache import default_jobs
 from signals.walkforward import generate_pair_schedule
 from backtest.portfolio import prepare_pair_periods, run_portfolio_backtest
 from backtest.report import print_portfolio_report, print_comparison
@@ -43,21 +47,31 @@ from backtest.tearsheet import plot_tearsheet, plot_comparison
 START_DATE        = "2018-01-01"
 END_DATE           = "2024-01-01"
 
-# Ticker universe walk-forward pair selection draws candidates from, spread
-# across a few sectors so there's a realistic chance of finding cointegrated
-# pairs each rebalance window (mostly-uncorrelated tickers just won't qualify).
-UNIVERSE = [
-    # Big banks
-    "JPM", "BAC", "WFC", "C",
-    # Consumer staples / beverages
-    "KO", "PEP",
-    # Energy majors
-    "XOM", "CVX", "COP",
-    # Retail
-    "WMT", "TGT", "COST",
-    # Airlines
-    "DAL", "UAL", "AAL",
-]
+# Ticker universe walk-forward pair selection draws candidates from.
+#   "wide"   : 11 SPDR sector ETFs + ~25 large caps per sector (~290 names
+#              after data cleaning), see data/universe.py. Pairs are only
+#              tested within a sector (~3,800 candidates per window).
+#   "narrow" : the original 15 names in 5 groups, every pair tested.
+UNIVERSE_NAME = "wide"
+
+NARROW_SECTORS = {
+    "JPM": "banks", "BAC": "banks", "WFC": "banks", "C": "banks",
+    "KO": "staples", "PEP": "staples",
+    "XOM": "energy", "CVX": "energy", "COP": "energy",
+    "WMT": "retail", "TGT": "retail", "COST": "retail",
+    "DAL": "airlines", "UAL": "airlines", "AAL": "airlines",
+}
+
+if UNIVERSE_NAME == "wide":
+    UNIVERSE       = wide.UNIVERSE
+    PAIR_SECTORS   = wide.SECTORS      # restricts candidate pairs to one sector
+    SECTORS        = wide.INDUSTRIES   # same_sector feature = same industry group
+    MAX_MISSING    = 0.01              # a late listing would shorten everyone's history
+else:
+    UNIVERSE       = list(NARROW_SECTORS)
+    PAIR_SECTORS   = None
+    SECTORS        = NARROW_SECTORS
+    MAX_MISSING    = 0.05
 
 TRAIN_WINDOW      = 252   # trading days of history used to re-fit cointegration
 TEST_WINDOW       = 63    # trading days each pair-selection stays active (~1 quarter)
@@ -73,20 +87,23 @@ STOP_THRESHOLD    = 3.5   # |z| beyond this = pair likely broke; exit and wait
 # feature, so the classifier can still learn to distrust weak pairs.
 # For the conservative stand-alone engine use 0.05 + "bh".
 PVALUE_CUTOFF     = 0.10  # FDR level under "bh", family-wise level under "bonferroni"
-MULTIPLE_TESTING  = None  # "bh" | "bonferroni" | None — 105 pairs/quarter need a correction
+MULTIPLE_TESTING  = None  # "bh" | "bonferroni" | None — 3,843 pairs/window (wide) need a correction
 MIN_HALF_LIFE     = 5     # days — faster than this is usually noise / bid-ask bounce
 MAX_HALF_LIFE     = 60    # days — slower than this won't revert inside a 63d window
 SIGNAL            = "rolling"  # "rolling" z-score of the spread | "innovation" = Kalman e/sqrt(S)
 TARGET_DAILY_VOL  = 0.0025  # per-pair daily vol target, as a fraction of book capital
                           # (~10 uncorrelated pairs on at once -> ~0.8%/day, ~12%/yr for the book)
+# Book-level budget. When set, each period's per-pair target is
+# BOOK_DAILY_VOL / sqrt(pairs active that period) instead of TARGET_DAILY_VOL,
+# so ~500 concurrent pairs don't run ~7x the vol of 10. The pair count is
+# known at period_start, so this is causal. It assumes independent pairs;
+# on the wide universe realised book vol still comes out ~3x the budget
+# (40% vs ~13%/yr) because pairs share legs and sector factors. Sharpe/DSR
+# don't depend on the scale; returns, vol and drawdowns do.
+BOOK_DAILY_VOL    = 0.008 if UNIVERSE_NAME == "wide" else None
 
-SECTORS = {
-    "JPM": "banks", "BAC": "banks", "WFC": "banks", "C": "banks",
-    "KO": "staples", "PEP": "staples",
-    "XOM": "energy", "CVX": "energy", "COP": "energy",
-    "WMT": "retail", "TGT": "retail", "COST": "retail",
-    "DAL": "airlines", "UAL": "airlines", "AAL": "airlines",
-}
+N_JOBS            = default_jobs()          # processes for coint tests + Kalman fits
+CACHE_DIR         = "cache"                 # prices, coint tests, Kalman fits (gitignored)
 
 # ── Self-learning layer (learn/) ──────────────────────────────────────────────
 SELF_LEARNING     = True
@@ -98,8 +115,13 @@ KELLY_UNIT        = 0.25    # ...or its Kelly fraction <= 0; size = f*/KELLY_UNI
 MAX_SIZE_MULT     = 2.0
 HOLD_MULTIPLE     = 2.0     # triple-barrier time limit = HOLD_MULTIPLE x half-life
 # Configurations evaluated while building this, beyond the ones main.py runs
-# itself: two candidate screens (raw p<0.05 and p<0.10). Counted in the DSR.
-EXTRA_TRIALS      = 2
+# itself (7 variants + 12 grid points = 19). Counted in the DSR. Each line
+# is one full run of 7 variants + 12 grid points:
+#   narrow universe, raw p<0.05 screen                                   19
+#   narrow universe, raw p<0.10 screen                                   19
+#   wide universe, BH-at-10% screen (sensitivity check)                  19
+# Add 19 here for every further configuration you try.
+EXTRA_TRIALS      = 19 + 19 + 19
 TRADE_LOG_PATH    = os.path.join("outputs", "trade_log.sqlite")   # ".parquet" needs pyarrow
 
 
@@ -113,11 +135,11 @@ def main():
     steps = 5 if SELF_LEARNING else 4
 
     print(f"\n[1/{steps}] Fetching prices for {len(UNIVERSE)} tickers ({START_DATE} -> {END_DATE})...")
-    prices = fetch_prices(UNIVERSE, START_DATE, END_DATE)
+    prices = fetch_prices(UNIVERSE, START_DATE, END_DATE, max_missing=MAX_MISSING, cache_dir=CACHE_DIR)
     print(f"      {len(prices)} trading days loaded across {len(prices.columns)} tickers.")
     spy = None
     if SELF_LEARNING:
-        spy = fetch_prices([MARKET_TICKER], START_DATE, END_DATE)[MARKET_TICKER]
+        spy = fetch_prices([MARKET_TICKER], START_DATE, END_DATE, cache_dir=CACHE_DIR)[MARKET_TICKER]
         spy = spy.reindex(prices.index).ffill()
 
     print(f"\n[2/{steps}] Walk-forward cointegration (train={TRAIN_WINDOW}d, test={TEST_WINDOW}d)...")
@@ -131,6 +153,9 @@ def main():
         min_half_life=MIN_HALF_LIFE,
         max_half_life=MAX_HALF_LIFE,
         verbose=True,
+        sectors=PAIR_SECTORS,
+        n_jobs=N_JOBS,
+        cache_dir=CACHE_DIR,
     )
     if not schedule:
         print("      No cointegrated pairs found in any window. Try a bigger/different universe.")
@@ -138,9 +163,20 @@ def main():
     n_distinct = len({(pp.ticker_a, pp.ticker_b) for pp in schedule})
     print(f"      {len(schedule)} pair-period(s) across {n_distinct} distinct pair(s).")
 
-    print(f"\n[3/{steps}] Backtesting every pair-period (vol target={TARGET_DAILY_VOL:.2%}/day)...")
+    if BOOK_DAILY_VOL:
+        n_active = {}
+        for pp in schedule:
+            n_active[pp.period_start] = n_active.get(pp.period_start, 0) + 1
+        target_vol = {T: BOOK_DAILY_VOL / np.sqrt(k) for T, k in n_active.items()}
+        vol_msg = (f"book budget {BOOK_DAILY_VOL:.2%}/day split over {min(n_active.values())}-"
+                   f"{max(n_active.values())} pairs/period")
+    else:
+        target_vol = TARGET_DAILY_VOL
+        vol_msg = f"vol target={TARGET_DAILY_VOL:.2%}/day per pair"
+    print(f"\n[3/{steps}] Backtesting every pair-period ({vol_msg})...")
     # Kalman fits are done once and shared by the baseline and every learned variant.
-    prepared = prepare_pair_periods(prices, schedule, TARGET_DAILY_VOL, TRAIN_WINDOW)
+    prepared = prepare_pair_periods(prices, schedule, target_vol, TRAIN_WINDOW,
+                                    n_jobs=N_JOBS, cache_dir=CACHE_DIR)
     results = run_portfolio_backtest(
         prices,
         schedule,
@@ -148,7 +184,6 @@ def main():
         entry_threshold=ENTRY_THRESHOLD,
         exit_threshold=EXIT_THRESHOLD,
         stop_threshold=STOP_THRESHOLD,
-        target_daily_vol=TARGET_DAILY_VOL,
         signal=SIGNAL,
         train_window=TRAIN_WINDOW,
         prepared=prepared,

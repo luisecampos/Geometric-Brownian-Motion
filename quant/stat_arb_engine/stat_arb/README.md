@@ -7,7 +7,10 @@ single book.
 
 ## What it does
 
-1. Downloads price data from Yahoo Finance for a ticker universe
+1. Downloads price data from Yahoo Finance for a ticker universe: by
+   default the 11 SPDR sector ETFs plus ~25 large caps per sector (291
+   names with full 2018-2023 history, `data/universe.py`), with candidate
+   pairs restricted to the same sector
 2. **Walk-forward**: rolls a cointegration re-test (Engle-Granger, on log
    prices) forward in quarterly steps — at each step only the trailing
    `TRAIN_WINDOW` days are used to decide which pairs are tradeable for the
@@ -48,6 +51,13 @@ python tests/test_engine.py
 python tests/test_learn.py      # no-look-ahead checks for the learning layer (~2-3 min)
 ```
 
+On the wide universe, `python main.py` takes 15-30 minutes on 8 cores and
+needs a few GB of RAM. The ~77,000 Engle-Granger tests (~4.5 min) and
+~9,800 Kalman MLE fits (~1-2 min in a 7-process pool) are cached under
+`cache/` (~250 MB), so later runs load them in under two minutes. The rest
+is the learning layer: 26,000 candidate signals, two classifiers retrained
+19 times, and ~17 full-book backtests at ~20 s each.
+
 ## Project structure
 
 ```
@@ -55,13 +65,15 @@ stat_arb/
 ├── main.py                  # Entry point + config
 ├── requirements.txt
 ├── data/
-│   └── fetch.py             # Price data download
+│   ├── fetch.py             # Price data download (cached under cache/)
+│   └── universe.py          # Wide universe: sector ETFs + large caps, sector/industry maps
 ├── signals/
 │   ├── cointegration.py     # Engle-Granger pair finder
 │   ├── kalman.py            # Dynamic hedge ratio (Kalman filter)
 │   ├── zscore.py            # Rolling z-score signal
 │   ├── walkforward.py       # Rolling pair-selection schedule (no look-ahead)
-│   └── sizing.py            # Vol-targeted position sizing
+│   ├── sizing.py            # Vol-targeted position sizing
+│   └── cache.py             # Disk cache + process pool for coint tests and Kalman fits
 ├── backtest/
 │   ├── engine.py            # Day-by-day simulation for one pair
 │   ├── portfolio.py         # Runs every pair-period, combines into one book
@@ -79,14 +91,15 @@ stat_arb/
 │   ├── test_kalman.py       # Spread recovers a known synthetic OU spread
 │   ├── test_engine.py       # PnL accounting, no look-ahead, force-close, stop
 │   └── test_learn.py        # Features/labels/training/variants use no future data
-└── outputs/                 # Generated tearsheets (gitignored)
+├── outputs/                 # Generated tearsheets (gitignored)
+└── cache/                   # Prices, coint tests, Kalman fits (gitignored; delete to recompute)
 ```
 
 ## Key parameters (edit in main.py)
 
 | Parameter          | Default    | Effect                                              |
 |---------------------|-----------|------------------------------------------------------|
-| `UNIVERSE`          | 15 stocks | Ticker universe walk-forward draws candidate pairs from |
+| `UNIVERSE_NAME`     | `"wide"`  | `"wide"` = 11 sector ETFs + ~25 large caps per sector (291 names with data), pairs tested within a sector only; `"narrow"` = the original 15 stocks, every pair tested |
 | `TRAIN_WINDOW`      | 252 days  | History used to re-fit cointegration each rebalance   |
 | `TEST_WINDOW`       | 63 days   | How long a qualifying pair stays tradeable (~1 quarter) |
 | `LOOKBACK_WINDOW`   | 60 days   | Z-score rolling window                                |
@@ -98,6 +111,8 @@ stat_arb/
 | `MIN_HALF_LIFE`     | 5 days    | Drop pairs reverting faster than this (usually noise)  |
 | `MAX_HALF_LIFE`     | 60 days   | Drop pairs too slow to revert inside a 63-day window   |
 | `SIGNAL`            | `"rolling"` | `"rolling"` z-score of the spread, or `"innovation"` = Kalman e/√S |
+| `BOOK_DAILY_VOL`    | 0.8% (wide) | Book budget: each period's per-pair target is this / √(pairs active that period). `None` (narrow) uses `TARGET_DAILY_VOL` per pair |
+| `N_JOBS`, `CACHE_DIR` | cores−1, `cache/` | Process pool and disk cache for the Engle-Granger tests and Kalman fits |
 | `TARGET_DAILY_VOL`  | 0.25%     | Per-pair daily PnL vol target, as a fraction of book capital (gross leverage capped at 3x). Was 1% when PnL was in arbitrary units; at 1% of real capital, ~6 pairs on at once ran ~48% annual vol |
 
 Kalman settings live in `signals/kalman.py`: noise is estimated per
@@ -131,12 +146,15 @@ backtest:
   tearsheet's rolling Sharpe.
 - **Pair selection was mostly false positives.** 105 pairs tested at p<0.05
   every quarter gives ~5 hits per window from chance alone. On 2018-2024
-  data this universe produced 118 raw hits over 20 windows, against ~105
-  expected under the null, so most of what the old engine traded was noise.
-  With BH, very few pair-periods survive. That's the honest answer for this
-  universe, and the next lever is a bigger or better-targeted universe.
+  data the 15-name universe produced 118 raw hits over 20 windows, against
+  ~105 expected under the null, so most of what the old engine traded was
+  noise. With BH, very few pair-periods survive. The wide universe has more
+  to find, but not much more: 3,843 same-sector pairs per window give on
+  average 520 raw hits at p<0.10, against 384 expected under the null. After
+  BH at 10% and the half-life filter, only 5 of 20 windows have any pair,
+  and one quarter holds 217 of the 246.
 
-Before/after on identical 2018-2024 prices (Sharpe is the all-days version;
+Before/after on identical 2018-2024 prices for the original 15-name universe (Sharpe is the all-days version;
 returns are on book capital at the 0.25% per-pair vol target):
 
 | Run | Pair-periods | Trades | Sharpe | Total return | Max DD | Exits (signal / stop / period end) |
@@ -170,16 +188,15 @@ decides whether to take the signal and how large to make it.
   excursion of z into the entry band, whether the engine takes it or not.
   These are exactly the days the engine can open a trade on. Every engine
   entry matches a candidate, and the code checks this.
-- **Candidate set.** The meta-labeler needs labels, and BH at 5% leaves 3
-  trades in 2019-2023. The two options were a looser screen on the same
-  universe or a wider universe. I loosened the screen: raw p < 0.10, no
-  multiple-testing correction, half-life filter kept. That gives 213
-  pair-periods and 514 labelled candidates. It keeps the universe and data
-  identical to the foundation-fix numbers, so the comparison stays like for
-  like. It is also the textbook meta-labeling set-up, where a high-recall
-  primary model is paired with a precision filter. The coint p-value is a
-  feature, so the classifier can still learn to distrust weak pairs. Widening
-  the universe is still the better long-run fix (see below).
+- **Candidate set.** The meta-labeler needs labels. The screen is loose on
+  purpose: raw p < 0.10, no multiple-testing correction, half-life filter
+  kept. That is the textbook meta-labeling set-up, where a high-recall
+  primary model is paired with a precision filter, and the coint p-value is
+  a feature, so the classifier can still learn to distrust weak pairs. On
+  the original 15 names this gave 213 pair-periods and only 514 labelled
+  candidates. The default universe is now ~290 names (sector ETFs + large
+  caps, same-sector pairs only), which gives 9,836 pair-periods and 26,095
+  labelled candidates for the same 2019-2023 out-of-sample span.
 - **Labels: triple barrier**, simulated exactly like the engine. Shares are
   frozen at entry, decisions fill at the next close, and costs are paid on
   both legs. The barriers are: profit-take when |z| < `EXIT_THRESHOLD`;
@@ -202,7 +219,7 @@ decides whether to take the signal and how large to make it.
   | leg correlation | 60-day correlation of the legs' returns |
   | SPY 20-day vol, SPY trend | market regime; trend is SPY vs its 50-day average |
   | days since first qualified | how long the pair has been passing the screen |
-  | same-sector flag | both legs in the same sector |
+  | same-sector flag | both legs in the same group of the map passed in. On the wide universe every pair is already same-sector, so this is the finer *industry group* (banks vs insurers, E&P vs refiners; sector ETFs are their own group), 1 for 25% of candidates |
 - **Training** (`learn/metalabel.py`): logistic regression (L2, C=0.1) and
   HistGradientBoosting (depth 2), each retrained at every rebalance T on an
   expanding window of past candidates.
@@ -243,14 +260,87 @@ I checked that the tests fail when they should. A feature that peeks one day
 ahead fails the features test. Training on the test quarter's own candidates
 fails the end-to-end test. The end-to-end test takes about 2-3 minutes.
 
-### Results (2019-2023 out-of-sample, same 213 pair-periods for every row)
+### Results: wide universe (2019-2023 out-of-sample, same 9,836 pair-periods for every row)
 
-Default config (raw p < 0.10 screen): 514 candidate signals, of which the
-baseline takes 293. The triple-barrier win rate is 52%. The DSR uses N = 21
-configurations: the 7 variants, the 12-point grid, and 2 offline candidate
-screens. The baseline equals one grid point and is counted twice, which is
-slightly conservative. The expected best Sharpe of 21 skill-less trials is
-SR0 = 0.42 (annualised).
+Default config: 291 names (11 sector ETFs + large caps, `data/universe.py`),
+same-sector pairs only, raw p < 0.10 screen + half-life filter. That gives
+9,836 pair-periods across 3,485 distinct pairs, about 500 active per quarter
+(195-1,090), and **26,095 labelled candidate signals** (vs 514 on the 15-name
+universe), of which the baseline takes 13,852. The triple-barrier win rate
+is 53.5%.
+
+The DSR uses N = 76 configurations: the 7 variants and 12 grid points of
+this run, plus 57 run before it (the two narrow-universe screens and the
+wide BH sensitivity check below, 19 each; see `EXTRA_TRIALS` in `main.py`).
+The expected best Sharpe of 76 skill-less trials is SR0 = 1.16
+(annualised). It is this high because the grid's Sharpes are spread widely
+(-0.27 to +0.99), which raises V[SR].
+
+| Variant | Sharpe | DSR | Return | Vol | Max DD | Trades | Win % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **baseline** | **-0.18** | 0.00 | -35.6% | 40.1% | -118.7% | 13,852 | 57.8% |
+| meta-logit gate | -0.50 | 0.00 | -80.2% | 31.9% | -118.3% | 7,825 | 55.9% |
+| meta-logit kelly | -0.50 | 0.00 | -104.8% | 42.4% | -137.3% | 7,825 | 55.9% |
+| meta-hgb gate | -0.62 | 0.00 | -99.3% | 32.3% | -124.1% | 8,434 | 55.5% |
+| meta-hgb kelly | -0.63 | 0.00 | -127.8% | 41.0% | -150.5% | 8,434 | 55.5% |
+| tuned (nested WF) | **0.84** | 0.24 | +183.0% | 43.6% | -36.9% | 10,095 | 51.3% |
+| thompson alloc | -0.17 | 0.00 | -35.4% | 41.3% | -108.9% | 13,852 | 57.8% |
+
+Returns, vol and drawdown are on book capital, with a 0.8%/day book budget
+split as 1/√(active pairs) per period. Realised vol is 40%, not the ~13% the
+budget implies, because ~500 concurrent pairs share legs and sector factors.
+The 1/√n split assumes independent pairs, and with n that large even small
+positive correlations (the report shows an average of 0.00 to two decimals)
+add up. Those three columns scale linearly with the budget.
+Sharpe, DSR and win rate do not.
+
+Out-of-sample classifier quality, on the 25,192 candidates scored after the
+cold start:
+
+| Model | AUC (pooled) | AUC (within quarter) | Brier | Brier of base rate |
+|---|---:|---:|---:|---:|
+| logit | 0.48 | 0.51 | 0.272 | 0.249 |
+| hgb | 0.47 | 0.50 | 0.270 | 0.249 |
+
+Calibration (OOS, quintiles of predicted p, logit; hgb looks the same):
+
+| Mean predicted p | Realised win rate | Mean net return per $1 gross |
+|---:|---:|---:|
+| 0.44 | 56.9% | +0.63% |
+| 0.52 | 54.0% | +0.13% |
+| 0.55 | 54.9% | +0.06% |
+| 0.60 | 54.8% | -0.14% |
+| 0.79 | 49.0% | -0.96% |
+
+The static grid, full-period Sharpe (ex post, for reference only; the
+baseline is e=2 x=0.5 lb=60):
+
+| exit \ (entry, lookback) | 1.5, 40 | 1.5, 60 | 2, 40 | 2, 60 | 2.5, 40 | 2.5, 60 |
+|---|---:|---:|---:|---:|---:|---:|
+| x = 0 | 0.99 | 0.60 | 0.20 | 0.63 | -0.11 | 0.15 |
+| x = 0.5 | -0.13 | -0.27 | -0.15 | -0.18 | -0.13 | -0.24 |
+
+Sharpe by year, baseline vs tuned: 2019 -0.98 / 0.47, 2020 -0.70 / 0.24,
+2021 0.35 / 0.75, 2022 0.30 / 1.10, 2023 0.42 / 1.82.
+
+**Sensitivity: BH at 10% on the wide universe.** With the false discovery
+rate controlled across each window's 3,843 tests, only 246 pair-periods
+survive, 217 of them in one quarter (2021-04). That leaves 585 candidates.
+Baseline Sharpe is -0.25, every learned variant is between -0.27 and -0.33,
+and every DSR is 0.00 (N = 76, SR0 = 0.96). A cleaner primary model doesn't
+rescue the layer, but 585 labels concentrated in one quarter can't test the
+meta-labeler properly either.
+
+### Results: original 15-name universe (2019-2023, 213 pair-periods)
+
+Kept for comparison. Raw p < 0.10 screen: 514 candidate signals, of which
+the baseline takes 293, with a 52% triple-barrier win rate. The DSR here used
+N = 21 (7 variants, 12 grid points, 2 offline screens) and SR0 = 0.42.
+Set `UNIVERSE_NAME = "narrow"` in `main.py` to re-run it. In the current
+environment (scikit-learn 1.9) every row reproduces exactly, except
+meta-logit gate, which gives -0.47 / 238 trades. The original commit gives
+the same -0.47 in this environment, so the difference comes from the
+library version, not the code.
 
 | Variant | Sharpe | DSR | Return | Vol | Max DD | Trades | Win % |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -262,54 +352,66 @@ SR0 = 0.42 (annualised).
 | tuned (nested WF) | -0.39 | 0.03 | -36.3% | 18.4% | -78.0% | 229 | 50.2% |
 | thompson alloc | -0.38 | 0.03 | -31.9% | 17.0% | -66.4% | 293 | 56.3% |
 
-Out-of-sample classifier quality, on the 456 candidates scored after the
-cold start:
-
-| Model | AUC (pooled) | AUC (within quarter) | Brier | Brier of base rate |
-|---|---:|---:|---:|---:|
-| logit | 0.42 | 0.56 | 0.356 | 0.250 |
-| hgb | 0.43 | 0.57 | 0.349 | 0.250 |
-
-Sensitivity check with the p < 0.05 screen (113 pair-periods, 276
-candidates; the baseline matches the measurement table above). The baseline
-Sharpe is -0.38. Learned variants range from -0.81 to -0.29: meta-logit gate
--0.34, Thompson -0.29, every other variant worse than the baseline, and every
-DSR ≤ 0.03.
+OOS classifier quality on the 456 candidates scored after the cold start:
+logit AUC 0.42 pooled / 0.56 within quarter, hgb 0.43 / 0.57, Brier
+0.356 / 0.349 vs 0.250 for the base rate. The p < 0.05 sensitivity check
+(113 pair-periods, 276 candidates) gave a baseline Sharpe of -0.38, learned
+variants from -0.81 to -0.29, and every DSR ≤ 0.03.
 
 ### Takeaways
 
-- **The learning layer does not rescue this book.** No variant has a
-  positive Sharpe, and no DSR is above 0.05. The best learned rows (meta-hgb
-  gate here, Thompson and meta-logit gate in the p<0.05 check) beat the
-  baseline by less than the spread between grid points, and the winner
-  differs between the two screens. That is noise, not skill.
-- **Kelly sizing makes it worse.** The classifier is most confident exactly
-  when it is most wrong, so scaling size up with p roughly doubles drawdowns.
-- **Why it fails: regime shift in the base rate.** The 2020-01 quarter
-  (COVID) holds 145 of the 514 candidates with a 33% win rate. The models had
-  been trained on 2019's 66-94% win rates and predicted about 0.89. After
-  that, the cluster dominates the training set. Feature-label correlations
-  also flip sign between 2019-21 and 2021-23: the coint p-value goes from
-  -0.03 to +0.21 and same-sector from 0.00 to -0.28. Pooled AUC is below 0.5
-  and Brier is far worse than the base rate.
-- **There is a faint ranking signal.** Within a quarter, AUC is about 0.56,
-  above 0.5 in 11 of 16 quarters. The level of p is unusable, but the
-  ordering isn't pure noise. The features that carry it out of sample are
-  coint p-value, leg correlation and days since first qualified.
-- **Nested tuning picks a non-default setting in 17 of 20 quarters and
-  loses.** Trailing-year Sharpe doesn't persist into the next quarter here.
+- **More labels did not help the meta-labeler. It got worse.** With 26,095
+  labels instead of 514, both classifiers are below 0.5 pooled AUC and at
+  0.50 within a quarter. The "faint ranking signal" the 15-name run showed
+  (within-quarter AUC 0.56) was noise and is gone at 50x the sample. Gating
+  skips about half of all signals and takes the Sharpe from -0.18 to
+  -0.50/-0.62. Kelly sizing adds risk without adding return.
+- **It is anti-calibrated, not just weak.** The top quintile by predicted
+  p (0.79) has the lowest realised win rate (49%) and loses 0.96% per trade.
+  The bottom quintile (p = 0.44) wins 57% of the time and makes +0.63%. The
+  model is confidently wrong in exactly the trades it would size up.
+- **The cause is the same: the base rate shifts from quarter to quarter.**
+  The COVID quarter (2020-01) is still 16% of all candidates (4,139 of
+  26,095, at a 47% win rate). The models, trained on 2019's 41-64%, predicted
+  0.68-0.74 for it. Later quarters swing between 47% and 65%. No feature
+  separates the outcomes enough to overcome that: every feature-label
+  correlation is below 0.035 in absolute value, and OOS permutation
+  importances are ≤ 0.003 AUC. The sample size was not the binding
+  constraint. The features are.
+- **Tuning is the one positive result, and it is still not significant.**
+  Every grid point that exits at the mean (z back to 0) beats every point
+  that exits at 0.5, and the nested walk-forward switches to x = 0 by
+  2019-Q3 and keeps it in 18 of 20 quarters. Its Sharpe is 0.84, positive in
+  every year, against -0.18 for the baseline. But the DSR is 0.24. After 76
+  configurations, a 0.84 Sharpe over 5 years is well inside what the best of
+  76 skill-less trials could show (SR0 = 1.16). It also didn't carry over to
+  the 15-name universe, where tuning lost. Treat "exit at the mean, not at
+  0.5" as a hypothesis to test on new data, not a finding.
+- **Thompson allocation is a no-op here** (-0.17 vs -0.18). With ~500
+  active pairs a quarter, most of them new, there's almost no per-arm history
+  to learn from.
+- **The wider universe makes the baseline less bad, not good.** Sharpe went
+  from -0.36 to -0.18 with a 57.8% win rate, but it still loses. Stops and
+  period-end exits (5,089 of 13,852 trades) outweigh the signal exits.
 
 ### Next steps (not done)
 
-- **Widen the universe** (sector ETFs + constituents, a few hundred names),
-  so that the primary model has real cointegration to find and the
-  meta-labeler gets thousands of labels instead of hundreds.
-- **Sample-uniqueness weights** (AFML ch. 4), so that one crowded quarter
-  of overlapping, near-duplicate labels doesn't dominate training.
-- **Rank-based gating**: skip the bottom fraction of each quarter's
-  candidates by p, instead of using an absolute threshold. This uses the
-  within-quarter ranking and ignores the unstable level. It counts as a new
+- **Test "exit at the mean" out of sample.** Pre-register e=1.5/2, x=0 and
+  run it once on 2024-2026 data. That is one new trial, not 19, and it is
+  the only result here worth spending fresh data on.
+- **Normalise the base rate out of the labels**: predict whether a signal
+  beats its own quarter's median, or gate on within-quarter rank instead of
+  an absolute p. Sample-uniqueness weights (AFML ch. 4) would also stop one
+  crowded quarter from dominating training. Each of these counts as a new
   configuration for the DSR.
+- **Better features before more data.** Candidates: the spread's recent
+  reversion speed vs its training half-life, sector-ETF residual momentum,
+  earnings-date proximity for either leg, and short interest.
+- **Point-in-time universe.** Use historical index membership, so the
+  backtest also trades the names that were later acquired or delisted.
+- **Correlation-aware risk budget.** The 1/√n split assumes independent
+  pairs and runs 3x its vol target. Sizing to a covariance estimate of the
+  pair PnLs (or capping each leg's total exposure) would fix that.
 
 ## What to learn / extend next
 
@@ -322,9 +424,10 @@ DSR ≤ 0.03.
   pair-period's PnL move with others active around the same time" rather
   than a strict pairwise stat
 - ~~Stop losses~~ — done (`STOP_THRESHOLD`, exits logged as `exit_reason="stop"`)
-- **Bigger universe** — with honest multiple-testing control, 15 tickers
-  rarely yield a significant pair; sector ETFs + constituents, or a few
-  hundred names, would give the selection step something to find
-- ~~Meta-labeling~~ — done (`learn/`). It does not help on this universe yet;
+- ~~Bigger universe~~ — done (`data/universe.py`): sector ETFs + ~25 large
+  caps per sector, pairs within a sector. It is survivorship-biased (names
+  picked with hindsight; 8 that were since acquired or delisted have no
+  Yahoo data); a point-in-time constituent list would fix that
+- ~~Meta-labeling~~ — done (`learn/`). It does not help, on either universe;
   see "Self-learning layer" for why and what to try next
 - **Execution layer** — port the signal generation to C++ for live trading

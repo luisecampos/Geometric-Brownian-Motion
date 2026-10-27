@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import closing
 
 import numpy as np
 import pandas as pd
@@ -159,9 +160,15 @@ def build_candidate_table(
         cands = find_candidate_signals(z, prep.first, entry_threshold, stop_threshold)
         if not cands:
             continue
-        static = selection_window_features(
-            prep.series_a.iloc[:prep.train_size], prep.series_b.iloc[:prep.train_size]
-        )
+        if np.isfinite(pp.adf_stat):
+            # Walk-forward already ran this exact test on the same window
+            # (log prices of the train_size rows before period_start).
+            static = {"coint_pvalue": float(pp.pvalue), "adf_stat": float(pp.adf_stat),
+                      "half_life": float(pp.half_life)}
+        else:
+            static = selection_window_features(
+                prep.series_a.iloc[:prep.train_size], prep.series_b.iloc[:prep.train_size]
+            )
         hl = static["half_life"] if np.isfinite(static["half_life"]) else pp.half_life
         max_hold = int(max(min_hold, round(hold_multiple * hl))) if np.isfinite(hl) else 60
 
@@ -234,14 +241,14 @@ class TradeLog:
                     out[c] = out[c].dt.strftime("%Y-%m-%d")
                 elif out[c].dtype == bool:
                     out[c] = out[c].astype(int)
-            with sqlite3.connect(self.path) as con:
+            with closing(sqlite3.connect(self.path)) as con, con:
                 out.to_sql("candidates", con, if_exists="replace", index=False)
         return self.path
 
     def load(self) -> pd.DataFrame:
         if self.path.endswith(".parquet"):
             return pd.read_parquet(self.path)
-        with sqlite3.connect(self.path) as con:
+        with closing(sqlite3.connect(self.path)) as con:
             df = pd.read_sql("SELECT * FROM candidates", con)
         for c in ("period_start", "decision_date", "entry_date", "t1"):
             if c in df:

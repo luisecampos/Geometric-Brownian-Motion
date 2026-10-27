@@ -123,7 +123,6 @@ def print_portfolio_report(results) -> None:
     """
     eq   = results.equity_curve
     dpnl = results.daily_pnl
-    corr = results.pair_pnl_corr
 
     n_pair_periods = len(results.per_pair)
     n_distinct_pairs = len({(a, b) for (a, b, _) in results.per_pair.keys()})
@@ -135,11 +134,7 @@ def print_portfolio_report(results) -> None:
     pct_in_market = (dpnl != 0).mean() * 100
 
     # Average pairwise correlation, off-diagonal only
-    if corr.shape[0] > 1:
-        off_diag = corr.values[~np.eye(corr.shape[0], dtype=bool)]
-        avg_corr = float(np.nanmean(off_diag))
-    else:
-        avg_corr = float("nan")
+    avg_corr = results.avg_pair_corr()
 
     print("=" * 60)
     print("  PORTFOLIO BACKTEST RESULTS")

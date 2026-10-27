@@ -171,8 +171,9 @@ def multiplier_series(candidates: pd.DataFrame, mult: np.ndarray, prepared: list
     """
     out = {}
     df = candidates.assign(_m=mult)
+    by_label = {p.label: p for p in prepared}
     for label, g in df.groupby("pair_label"):
-        prep = next(p for p in prepared if p.label == label)
+        prep = by_label[label]
         s = pd.Series(np.nan, index=prep.series_a.index)
         s.loc[g["decision_date"].values] = g["_m"].values
         out[label] = s.ffill().fillna(1.0)

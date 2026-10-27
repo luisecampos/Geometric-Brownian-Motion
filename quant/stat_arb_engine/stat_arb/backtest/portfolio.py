@@ -22,7 +22,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
+from functools import cached_property
 
+from signals.cache import DiskCache, fingerprint, parallel_map
 from signals.kalman import KalmanHedgeRatio, KalmanResult
 from signals.zscore import compute_zscore
 from signals.sizing import vol_target_size
@@ -36,8 +38,31 @@ class PortfolioResults:
     daily_pnl      : pd.Series
     per_pair       : dict          # (ticker_a, ticker_b, period_start) -> BacktestResults
     pair_pnl       : pd.DataFrame  # daily PnL per pair-period, columns = pair labels
-    pair_pnl_corr  : pd.DataFrame  # correlation matrix of pair_pnl columns
     kalman_params  : dict = field(default_factory=dict)  # label -> fitted Kalman params
+
+    @cached_property
+    def pair_pnl_corr(self) -> pd.DataFrame:
+        """Correlation matrix of pair_pnl columns. Computed on first use:
+        with thousands of pair-periods it is large, and only the tearsheet
+        needs it."""
+        return self.pair_pnl.corr()
+
+    def avg_pair_corr(self) -> float:
+        """
+        Mean off-diagonal correlation of pair_pnl columns, without building
+        the matrix: with standardised columns Z, sum(corr) = |Z 1|^2 / (T-1).
+        Columns with zero variance (no trades) are left out, as corr() would
+        give them NaN.
+        """
+        x = self.pair_pnl.values
+        sd = x.std(axis=0, ddof=1)
+        keep = sd > 0
+        k = int(keep.sum())
+        if k < 2:
+            return float("nan")
+        z = (x[:, keep] - x[:, keep].mean(axis=0)) / sd[keep]
+        total = float(np.sum(z.sum(axis=1) ** 2)) / (len(x) - 1)
+        return (total - k) / (k * k - k)
 
 
 @dataclass
@@ -74,11 +99,21 @@ def pair_label(pp: PairPeriod) -> str:
     return f"{pp.ticker_a}/{pp.ticker_b} [{pp.period_start.date()}]"
 
 
+def _fit_kalman(args):
+    """Worker: one pair-period's Kalman fit -> (KalmanResult, fitted params)."""
+    series_a, series_b, train_size = args
+    kalman = KalmanHedgeRatio()
+    kf = kalman.fit(series_a, series_b, train_size=train_size)
+    return kf, kalman.fitted_params
+
+
 def prepare_pair_periods(
     prices          : pd.DataFrame,
     pair_schedule   : list[PairPeriod],
-    target_daily_vol: float = 0.01,
+    target_daily_vol: float | dict = 0.01,
     train_window    : int = 252,
+    n_jobs          : int = 1,
+    cache_dir       : str | None = None,
 ) -> list[PreparedPair]:
     """
     Fit each pair-period's Kalman filter (centring, OLS seed, MLE noise
@@ -86,8 +121,14 @@ def prepare_pair_periods(
     days before period_start, the same data walk-forward used to pick it —
     and filter causally through the active period. Also computes the
     vol-target size series.
+
+    target_daily_vol: one per-pair target, or {period_start: target} to set
+        it per rebalance (e.g. a book budget split across that period's
+        pairs, which is known at period_start).
+    n_jobs / cache_dir: fit in a process pool, and cache fits on disk keyed
+        by a hash of the pair's window prices and train size.
     """
-    prepared = []
+    windows = []
     for pp in pair_schedule:
         if pp.train_start is not None:
             window = prices.loc[pp.train_start:pp.period_end]
@@ -97,15 +138,26 @@ def prepare_pair_periods(
         series_a = window[pp.ticker_a]
         series_b = window[pp.ticker_b]
         train_size = int((window.index < pp.period_start).sum())
+        windows.append((series_a, series_b, train_size))
 
-        kalman = KalmanHedgeRatio()
-        kf = kalman.fit(series_a, series_b, train_size=train_size)
-        size = vol_target_size(series_a, series_b, kf.hedge_ratio, target_daily_vol=target_daily_vol)
+    cache = DiskCache(cache_dir, "kalman")
+    keys = [fingerprint(a.values, b.values, a.index[0], a.index[-1], ts) for a, b, ts in windows]
+    todo = [k for k, key in enumerate(keys) if cache.get(key) is None]
+    fits = parallel_map(_fit_kalman, [windows[k] for k in todo], n_jobs, chunksize=16)
+    for k, fit in zip(todo, fits):
+        cache.put(keys[k], fit)
+    cache.save()
+
+    prepared = []
+    for pp, (series_a, series_b, train_size), key in zip(pair_schedule, windows, keys):
+        kf, params = cache.get(key)
+        vol = target_daily_vol[pp.period_start] if isinstance(target_daily_vol, dict) else target_daily_vol
+        size = vol_target_size(series_a, series_b, kf.hedge_ratio, target_daily_vol=vol)
 
         prepared.append(PreparedPair(
             pp=pp, label=pair_label(pp), series_a=series_a, series_b=series_b,
             train_size=train_size, kf=kf, size=size,
-            kalman_params=kalman.fitted_params,
+            kalman_params=params,
         ))
     return prepared
 
@@ -198,16 +250,21 @@ def combine_pair_results(
     """Sum per-pair-period daily PnL into one book on a common calendar."""
     # Reindex onto the full calendar so days with nothing active count as
     # flat (0 return) days — otherwise Sharpe/vol only see "in-market" days.
-    pair_pnl = pd.concat(pair_pnl_cols, axis=1).reindex(calendar).fillna(0.0)
+    # (Filled column by column: pd.concat of thousands of differently-indexed
+    # Series is slow, and this runs once per variant and grid point.)
+    values = np.zeros((len(calendar), len(pair_pnl_cols)))
+    for k, s in enumerate(pair_pnl_cols.values()):
+        pos = calendar.get_indexer(s.index)
+        ok = pos >= 0
+        values[pos[ok], k] = np.nan_to_num(s.values[ok], nan=0.0)
+    pair_pnl = pd.DataFrame(values, index=calendar, columns=list(pair_pnl_cols))
     daily_pnl = pair_pnl.sum(axis=1).rename("daily_pnl")
     equity_curve = daily_pnl.cumsum().rename("equity")
-    pair_pnl_corr = pair_pnl.corr()
 
     return PortfolioResults(
         equity_curve  = equity_curve,
         daily_pnl     = daily_pnl,
         per_pair      = per_pair,
         pair_pnl      = pair_pnl,
-        pair_pnl_corr = pair_pnl_corr,
         kalman_params = kalman_params or {},
     )
