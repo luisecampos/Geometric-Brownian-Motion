@@ -121,7 +121,7 @@ def main():
     print("\n  Sharpe by year:")
     for name, res in results.items():
         x = res.daily_pnl
-        yrs = {y: round(daily_sharpe(x[x.index.year == y]) * np.sqrt(252), 2) for y in sorted(set(x.index.year))}
+        yrs = {int(y): round(float(daily_sharpe(x[x.index.year == y]) * np.sqrt(252)), 2) for y in sorted(set(x.index.year))}
         print(f"    {name:<28} {yrs}")
 
     diff = results["SECONDARY e=2 x=0 lb=60"].daily_pnl - results["REFERENCE e=2 x=0.5 lb=60"].daily_pnl

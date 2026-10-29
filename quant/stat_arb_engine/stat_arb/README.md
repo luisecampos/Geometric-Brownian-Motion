@@ -44,6 +44,7 @@ pip install -r requirements.txt
 
 # 3. Run (no prompts — everything is configured in main.py)
 python main.py
+python oos_test.py              # pre-registered 2024-2026 test (see "Self-learning layer")
 
 # 4. Tests (synthetic-data checks for the Kalman filter and the engine's accounting)
 python tests/test_kalman.py
@@ -63,6 +64,7 @@ is the learning layer: 26,000 candidate signals, two classifiers retrained
 ```
 stat_arb/
 ├── main.py                  # Entry point + config
+├── oos_test.py              # Pre-registered 2024-2026 out-of-sample test (x=0)
 ├── requirements.txt
 ├── data/
 │   ├── fetch.py             # Price data download (cached under cache/)
@@ -393,15 +395,43 @@ variants from -0.81 to -0.29, and every DSR ≤ 0.03.
   0.84, positive in every year, against -0.18 for the baseline. But the DSR
   is 0.24: after 76 configurations, a 0.84 Sharpe over 5 years is well
   inside what the best of 76 skill-less trials could show (SR0 = 1.16). It
-  also didn't carry over to the 15-name universe, where tuning lost. Treat
-  "don't take profit at 0.5, hold to period end" as a hypothesis to test on
-  new data, not a finding.
+  also didn't carry over to the 15-name universe, where tuning lost. The
+  pre-registered test on 2024-2026 data (below) did not confirm it either.
 - **Thompson allocation is a no-op here** (-0.17 vs -0.18). With ~500
   active pairs a quarter, most of them new, there's almost no per-arm history
   to learn from.
 - **The wider universe makes the baseline less bad, not good.** Sharpe went
   from -0.36 to -0.18 with a 57.8% win rate, but it still loses. Stops and
   period-end exits (5,089 of 13,852 trades) outweigh the signal exits.
+
+### Out-of-sample test: no profit-taking exit, 2024-01 to 2026-09 (pre-registered)
+
+The one in-sample result worth spending fresh data on was "x = 0 beats
+x = 0.5". `oos_test.py` fixes the configurations, data window and verdict
+rule in its docstring, and was committed before any 2024-2026 price was
+downloaded. The setup is the wide default: same universe, screen and costs,
+no learning layer. Pairs are selected on 2023 and trade 2024-01-04 to
+2026-09-30: 11 quarters, 5,008 pair-periods, 312-718 pairs per quarter. XLC
+has full history in this window, so it is in (292 names, 3,856 pairs per
+window). There are 2 candidates, so the DSR uses N = 2.
+
+| Config | Sharpe | DSR (N=2) | Return | Vol | Max DD | Trades | Win % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **primary** e=1.5 x=0 lb=40 (the tuner's last choice) | **-0.44** | 0.22 | -52.8% | 44.5% | -111.6% | 5,631 | 48.4% |
+| secondary e=2 x=0 lb=60 (baseline, exit changed only) | -0.32 | 0.27 | -30.5% | 34.6% | -88.4% | 5,029 | 48.4% |
+| reference e=2 x=0.5 lb=60 (baseline) | -0.34 | 0.26 | -28.2% | 30.0% | -62.4% | 7,109 | 60.5% |
+
+Sharpe by year (2024 / 2025 / 2026 to September): primary -1.06 / 0.95 /
+-1.73, secondary -0.54 / 1.14 / -1.86, reference -1.72 / 0.40 / -0.08.
+
+The exit change on its own (daily PnL of secondary minus reference) has a
+Sharpe of -0.03 and t = -0.05 over 687 days. That is no effect at all.
+
+**Verdict, by the pre-registered rule: NOT CONFIRMED.** The primary lost
+money and did worse than the baseline. The in-sample 0.84 was selection
+plus one regime, which is what its 0.24 DSR said. Every configuration in
+this README now loses money out of sample. The 2 trials are added to
+`EXTRA_TRIALS`.
 
 ### Next steps (not done)
 
