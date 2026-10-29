@@ -236,7 +236,8 @@ decides whether to take the signal and how large to make it.
   over average loss. `kelly` applies the same gate and scales size by
   clip(f\*/0.25, 0, 2).
 - **Nested walk-forward tuning** (`learn/tuning.py`): at each rebalance,
-  (entry, exit, lookback) is chosen from {1.5, 2, 2.5} x {0, 0.5} x {40, 60}.
+  (entry, exit, lookback) is chosen from {1.5, 2, 2.5} x {0, 0.5} x {40, 60}
+  (exit 0 = no signal exit; hold to period end or stop).
   The pick is by the Sharpe each setting earned over the previous 252 days of
   its own out-of-sample trading.
 - **Thompson allocation** (`learn/allocation.py`): each pair is an arm, and
@@ -313,7 +314,9 @@ Calibration (OOS, quintiles of predicted p, logit; hgb looks the same):
 | 0.79 | 49.0% | -0.96% |
 
 The static grid, full-period Sharpe (ex post, for reference only; the
-baseline is e=2 x=0.5 lb=60):
+baseline is e=2 x=0.5 lb=60). The engine exits on |z| < exit, so **x = 0
+means no signal exit at all**: every trade is held until its period ends or
+the stop hits.
 
 | exit \ (entry, lookback) | 1.5, 40 | 1.5, 60 | 2, 40 | 2, 60 | 2.5, 40 | 2.5, 60 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -379,14 +382,20 @@ variants from -0.81 to -0.29, and every DSR ≤ 0.03.
   importances are ≤ 0.003 AUC. The sample size was not the binding
   constraint. The features are.
 - **Tuning is the one positive result, and it is still not significant.**
-  Every grid point that exits at the mean (z back to 0) beats every point
-  that exits at 0.5, and the nested walk-forward switches to x = 0 by
-  2019-Q3 and keeps it in 18 of 20 quarters. Its Sharpe is 0.84, positive in
-  every year, against -0.18 for the baseline. But the DSR is 0.24. After 76
-  configurations, a 0.84 Sharpe over 5 years is well inside what the best of
-  76 skill-less trials could show (SR0 = 1.16). It also didn't carry over to
-  the 15-name universe, where tuning lost. Treat "exit at the mean, not at
-  0.5" as a hypothesis to test on new data, not a finding.
+  Every grid point with x = 0 beats every point with x = 0.5, and the nested
+  walk-forward switches to x = 0 by 2019-Q3 and keeps it in 18 of 20
+  quarters. x = 0 is not "exit at the mean": the engine exits on
+  |z| < exit, which never fires at 0, so these settings never take profit
+  and hold every entry to period end or the stop (53-67 calendar days on
+  average, vs 23 for the baseline). With x = 0.5 the profit-taking exits
+  make money, but the trades that never revert lose more at period end and
+  at the stop. Holding everything turns that around. The tuned Sharpe is
+  0.84, positive in every year, against -0.18 for the baseline. But the DSR
+  is 0.24: after 76 configurations, a 0.84 Sharpe over 5 years is well
+  inside what the best of 76 skill-less trials could show (SR0 = 1.16). It
+  also didn't carry over to the 15-name universe, where tuning lost. Treat
+  "don't take profit at 0.5, hold to period end" as a hypothesis to test on
+  new data, not a finding.
 - **Thompson allocation is a no-op here** (-0.17 vs -0.18). With ~500
   active pairs a quarter, most of them new, there's almost no per-arm history
   to learn from.
@@ -396,9 +405,6 @@ variants from -0.81 to -0.29, and every DSR ≤ 0.03.
 
 ### Next steps (not done)
 
-- **Test "exit at the mean" out of sample.** Pre-register e=1.5/2, x=0 and
-  run it once on 2024-2026 data. That is one new trial, not 19, and it is
-  the only result here worth spending fresh data on.
 - **Normalise the base rate out of the labels**: predict whether a signal
   beats its own quarter's median, or gate on within-quarter rank instead of
   an absolute p. Sample-uniqueness weights (AFML ch. 4) would also stop one
