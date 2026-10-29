@@ -62,6 +62,7 @@ class LearningResults:
     calibration : dict             # classifier -> DataFrame
     tuned_choice: dict = field(default_factory=dict)
     thompson_log: pd.DataFrame = None
+    grid_results: dict = field(default_factory=dict)   # (entry, exit, lookback) -> PortfolioResults
 
 
 def run_learning_layer(prices, schedule, prepared, baseline, spy=None,
@@ -164,5 +165,5 @@ def run_learning_layer(prices, schedule, prepared, baseline, spy=None,
     return LearningResults(
         variants=variants, rows=rows, candidates=cands, clf_stats=clf_stats,
         importances=importances, calibration=calibration,
-        tuned_choice=tuned_choice, thompson_log=thompson_log,
+        tuned_choice=tuned_choice, thompson_log=thompson_log, grid_results=grid_results,
     )

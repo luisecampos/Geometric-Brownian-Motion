@@ -63,6 +63,7 @@ from signals.walkforward import generate_pair_schedule
 from backtest.portfolio import prepare_pair_periods, run_portfolio_backtest
 from backtest.report import summary_stats
 from learn.evaluate import daily_sharpe, deflated_sharpe
+from backtest.export import variant_tables, write_tables
 
 START_DATE = "2023-01-01"
 END_DATE   = "2026-10-01"     # yfinance end is exclusive: last day 2026-09-30
@@ -137,6 +138,11 @@ def main():
     else:
         verdict = "NOT CONFIRMED"
     print(f"\n  VERDICT (pre-registered rule on PRIMARY): {verdict}")
+
+    tables = variant_tables("OOS 2024-2026", results, {k: r["dsr"] for k, r in rows.items()},
+                            sectors=M.PAIR_SECTORS)
+    write_tables(tables, M.DASHBOARD_DIR, "oos")
+    print(f"  Dashboard tables saved to {M.DASHBOARD_DIR}")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ pip install -r requirements.txt
 # 3. Run (no prompts — everything is configured in main.py)
 python main.py
 python oos_test.py              # pre-registered 2024-2026 test (see "Self-learning layer")
+# Both write CSV tables for the results dashboard to outputs/dashboard/
 
 # 4. Tests (synthetic-data checks for the Kalman filter and the engine's accounting)
 python tests/test_kalman.py
@@ -80,6 +81,7 @@ stat_arb/
 │   ├── engine.py            # Day-by-day simulation for one pair
 │   ├── portfolio.py         # Runs every pair-period, combines into one book
 │   ├── report.py            # Performance metrics (single-pair + portfolio)
+│   ├── export.py            # Results as CSV tables (variants, equity, exits, sectors, ...)
 │   └── tearsheet.py         # 4-panel PNG + baseline-vs-learned comparison PNG
 ├── learn/                   # Self-learning layer (see below)
 │   ├── features.py          # Features as of each signal's decision date

@@ -40,6 +40,7 @@ from signals.walkforward import generate_pair_schedule
 from backtest.portfolio import prepare_pair_periods, run_portfolio_backtest
 from backtest.report import print_portfolio_report, print_comparison
 from backtest.tearsheet import plot_tearsheet, plot_comparison
+from backtest.export import variant_tables, learning_tables, write_tables
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -124,6 +125,7 @@ HOLD_MULTIPLE     = 2.0     # triple-barrier time limit = HOLD_MULTIPLE x half-l
 # Add 19 here for every further full configuration you try.
 EXTRA_TRIALS      = 19 + 19 + 19 + 2
 TRADE_LOG_PATH    = os.path.join("outputs", "trade_log.sqlite")   # ".parquet" needs pyarrow
+DASHBOARD_DIR     = os.path.join("outputs", "dashboard")            # CSV tables for the results dashboard
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -197,6 +199,9 @@ def main():
     print(f"      Saved to {out_path}")
 
     if not SELF_LEARNING:
+        paths = write_tables(variant_tables("2019-2023", {"baseline": results}, sectors=PAIR_SECTORS),
+                             DASHBOARD_DIR, "insample")
+        print(f"      Dashboard tables saved to {os.path.dirname(paths[0])}")
         return
 
     # Imported here so the plain engine runs without scikit-learn installed.
@@ -225,6 +230,11 @@ def main():
     cmp_path = plot_comparison(learned.variants, learned.rows, learned.importances,
                                learned.calibration, out_dir="outputs")
     print(f"      Comparison tearsheet saved to {cmp_path}")
+    dsr = {r["name"]: r["dsr"] for r in learned.rows}
+    tables = {**variant_tables("2019-2023", learned.variants, dsr, sectors=PAIR_SECTORS),
+              **learning_tables("2019-2023", learned)}
+    paths = write_tables(tables, DASHBOARD_DIR, "insample")
+    print(f"      Dashboard tables saved to {os.path.dirname(paths[0])}")
 
 
 if __name__ == "__main__":
