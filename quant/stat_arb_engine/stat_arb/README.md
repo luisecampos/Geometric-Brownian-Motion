@@ -632,8 +632,8 @@ verdict stays at 2bp, but a 2bp pass there would not show a tradable edge.
   bias is worse that far back, so treat a pass as support, not proof.
 - **Measure real costs.** REALISTIC is an assumption. Paper fills on these names
   would show the true cost, which matters because break-even is about 7bp.
-- **Trade less.** Lower turnover is the direct fix: a wider entry or a tighter
-  size would each count as new trials.
+- **Earn more per trade.** Scaling down doesn't help, because PnL and costs
+  shrink together. A wider entry band might, and would count as a new trial.
 - **Change the model.** Trade each stock's residual against its sector ETF
   (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal
