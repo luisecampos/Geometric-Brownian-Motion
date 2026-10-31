@@ -1,0 +1,8 @@
+{
+  "candidate": null,
+  "selection": null,
+  "rules": null,
+  "best_tested": "DISTANCE20",
+  "sharpe_2019_2023": 0.6724,
+  "t_vs_baseline": 0.7468
+}

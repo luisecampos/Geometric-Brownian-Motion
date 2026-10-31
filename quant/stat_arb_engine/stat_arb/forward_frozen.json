@@ -1,0 +1,8 @@
+{
+  "candidate": "DISTANCE20",
+  "selection": "DISTANCE20",
+  "rules": {},
+  "frozen_on": "2026-10-31",
+  "code_commit": "d99b213",
+  "exception": "Failed pair_test.py's pre-registered bar (Sharpe 0.67, t 0.75 vs baseline, needed t >= 2.4; forward_config.json records that outcome). Frozen by the user's decision as a declared exception, because new data is the only test that can settle it. A pass here does not undo the failed bar."
+}
