@@ -582,12 +582,58 @@ data has touched 2024-2026. DISTANCE20 alone stays in the holdout.
 - **NEWS is too broad for the small book.** It helps SCREEN slightly but cuts
   DISTANCE20 from 0.70 to 0.51. Most 8-Ks aren't price-moving news.
 
+### Cost test of DISTANCE20 (pre-registered, in-sample)
+
+Every result above assumes 2bp per leg and no short-borrow fee. `cost_test.py`
+re-prices the same trades at higher costs, using assumed rates, not measured
+fills. Costs never reach the signals, so each level has the same 600 trades,
+and no trial is added: N stays 89. The 2bp row reproduces the earlier 0.70.
+
+2019-2023, full period. The DSR uses N = 89, SR0 = 1.08. It is 0.20 at 2bp, not
+the 0.19 above, because the news configurations joined the trial variance.
+
+| DISTANCE20 at | Cost per leg | Borrow | Sharpe | DSR | Return | Max DD | Win % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| FREE | 0bp | none | 0.94 | 0.37 | +53.3% | -15.5% | 61.3% |
+| CURRENT | 2bp | none | 0.70 | 0.20 | +40.0% | -16.7% | 60.3% |
+| REALISTIC | 5bp | 0.50%/yr | 0.27 | 0.03 | +15.2% | -22.4% | 59.2% |
+| HARSH | 10bp | 1.00%/yr | -0.40 | 0.00 | -22.8% | -34.1% | 55.3% |
+
+Sharpe by year:
+
+| DISTANCE20 at | 2019 | 2020 | 2021 | 2022 | 2023 |
+|---|---:|---:|---:|---:|---:|
+| CURRENT | 0.66 | -0.37 | 1.65 | 0.56 | 1.34 |
+| REALISTIC | 0.06 | -0.66 | 1.19 | 0.11 | 0.93 |
+| HARSH | -0.87 | -1.11 | 0.48 | -0.57 | 0.29 |
+
+**Decision, by the pre-registered rule: COST-SENSITIVE.** The Sharpe stays above
+0 at REALISTIC and falls below it at HARSH. The holdout is unchanged, and its
+verdict stays at 2bp, but a 2bp pass there would not show a tradable edge.
+
+- **The margin is thin.** Gross, the book makes 10.7% a year. It breaks even at
+  8.0bp per leg, or 7.3bp with REALISTIC borrow, so 5bp leaves about 2bp of room.
+- **Turnover is the reason.** 120 trades a year sounds low, but each one moves
+  about 0.56x of capital each way, so the book trades 134x its capital a year.
+  Each 1bp per leg costs 1.3% a year. Borrow costs far less: about 0.7bp a leg.
+- **The book runs on leverage.** Average short notional is 1.88x capital, so
+  gross is about 3.8x if the longs match. A standard margin account allows about
+  2x. Scaling down keeps the Sharpe but halves the return, and it doesn't reduce
+  costs relative to PnL.
+- **The baseline has no edge to pay costs from.** SCREEN loses 2.2% a year before
+  any cost, on 245x turnover. Its losses are not a cost problem.
+- **These numbers are still optimistic.** The 0.70 is in-sample and was the best
+  of 3 candidates, every fill is at the close, and costs don't grow with size.
+
 ### Next steps (not done)
 
 - **Test DISTANCE20 on 2010-2017.** Nothing in this project has used those
   years, so this needs no waiting for the holdout. The universe's survivorship
   bias is worse that far back, so treat a pass as support, not proof.
-- **Test costs.** Every result here assumes 2bp per leg and no short-borrow fee.
+- **Measure real costs.** REALISTIC is an assumption. Paper fills on these names
+  would show the true cost, which matters because break-even is about 7bp.
+- **Trade less.** Lower turnover is the direct fix: a wider entry or a tighter
+  size would each count as new trials.
 - **Change the model.** Trade each stock's residual against its sector ETF
   (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal
