@@ -124,8 +124,9 @@ HOLD_MULTIPLE     = 2.0     # triple-barrier time limit = HOLD_MULTIPLE x half-l
 #   oos_test.py on 2024-2026: x=0 with e=1.5 lb=40 and e=2 lb=60          2
 #   exit_test.py on 2019-2023: LATE, TIME, CARRY, ALL                     4
 #   pair_test.py on 2019-2023: PERSIST2, PERSIST4, DISTANCE20             3
+#   news_test.py on 2019-2023: EARN, NEWS on SCREEN and DISTANCE20        4
 # Add 19 here for every further full configuration you try.
-EXTRA_TRIALS      = 19 + 19 + 19 + 2 + 4 + 3
+EXTRA_TRIALS      = 19 + 19 + 19 + 2 + 4 + 3 + 4
 TRADE_LOG_PATH    = os.path.join("outputs", "trade_log.sqlite")   # ".parquet" needs pyarrow
 DASHBOARD_DIR     = os.path.join("outputs", "dashboard")            # CSV tables for the results dashboard
 
