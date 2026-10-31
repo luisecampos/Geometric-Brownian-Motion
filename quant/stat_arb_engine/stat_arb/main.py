@@ -125,6 +125,7 @@ HOLD_MULTIPLE     = 2.0     # triple-barrier time limit = HOLD_MULTIPLE x half-l
 #   exit_test.py on 2019-2023: LATE, TIME, CARRY, ALL                     4
 #   pair_test.py on 2019-2023: PERSIST2, PERSIST4, DISTANCE20             3
 #   news_test.py on 2019-2023: EARN, NEWS on SCREEN and DISTANCE20        4
+#   cost_test.py re-prices the same trades and selects nothing            0
 # Add 19 here for every further full configuration you try.
 EXTRA_TRIALS      = 19 + 19 + 19 + 2 + 4 + 3 + 4
 TRADE_LOG_PATH    = os.path.join("outputs", "trade_log.sqlite")   # ".parquet" needs pyarrow

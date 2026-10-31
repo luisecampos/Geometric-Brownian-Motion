@@ -39,6 +39,19 @@ def test_trade_pnl_sums_to_total():
     assert np.isclose(sum(t.pnl for t in res.trades), res.daily_pnl.sum())
 
 
+def test_borrow_fee_charges_short_notional():
+    """z stays above entry, so we are short A from day 1 to the last day."""
+    a, b, beta, z = _inputs(n=40)
+    z = pd.Series(2.5, index=z.index)
+    beta = pd.Series(1.0, index=z.index)
+    plain = run_backtest(a, b, beta, z, stop_threshold=None)
+    fee = run_backtest(a, b, beta, z, stop_threshold=None, borrow_fee=0.01)
+    sh_a = 0.5 / a.iloc[1]                         # gross 1.0, half on each leg
+    expected = 0.01 / 252 * sh_a * a.iloc[1:-1].values
+    assert np.allclose((plain.daily_pnl - fee.daily_pnl).values[2:], expected)
+    assert np.isclose(fee.trades[0].pnl, fee.daily_pnl.sum())
+
+
 def test_open_position_force_closed():
     a, b, beta, z = _inputs()
     z = pd.Series(2.5, index=z.index)   # enters on day 1 and never reverts
@@ -160,6 +173,16 @@ def test_default_rules_change_nothing():
     prices, schedule, prepared = _book(3, [0, 1, 2])
     a, b = _run(prices, schedule, prepared, None), _run(prices, schedule, prepared, ExitRules())
     assert a.daily_pnl.equals(b.daily_pnl)
+
+
+def test_costs_reach_the_engine_and_leave_trades_alone():
+    prices, schedule, prepared = _book(3, [0, 1, 2])
+    cheap = _run(prices, schedule, prepared, None)
+    dear = run_portfolio_backtest(prices, schedule, stop_threshold=None, prepared=prepared,
+                                  cost_bps=1e-3, borrow_fee=0.01)
+    dates = lambda r: [(t.entry_date, t.exit_date) for x in r.per_pair.values() for t in x.trades]
+    assert dates(cheap) == dates(dear)
+    assert dear.daily_pnl.sum() < cheap.daily_pnl.sum()
 
 
 def test_carry_spans_reselected_periods():

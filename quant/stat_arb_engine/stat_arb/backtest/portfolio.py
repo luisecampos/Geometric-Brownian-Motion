@@ -29,7 +29,7 @@ from signals.kalman import KalmanHedgeRatio, KalmanResult
 from signals.zscore import compute_zscore
 from signals.sizing import vol_target_size
 from signals.walkforward import PairPeriod
-from backtest.engine import run_backtest, BacktestResults
+from backtest.engine import run_backtest, BacktestResults, COST_BPS
 
 
 @dataclass
@@ -196,6 +196,8 @@ def run_portfolio_backtest(
     prepared        : list[PreparedPair] | None = None,
     size_multipliers: dict | None = None,
     exit_rules      : ExitRules | None = None,
+    cost_bps        : float = COST_BPS,
+    borrow_fee      : float = 0.0,
 ) -> PortfolioResults:
     """
     Run the full pipeline (Kalman hedge ratio -> z-score -> vol-target sizing
@@ -217,6 +219,7 @@ def run_portfolio_backtest(
         learning layer uses to skip or resize trades.
     exit_rules: optional ExitRules. None (or all defaults) leaves every
         result unchanged.
+    cost_bps, borrow_fee: see backtest.engine.run_backtest.
 
     PnL is a return on book capital: each pair's daily_pnl is its return on
     the whole book, so the portfolio return is their sum.
@@ -281,6 +284,8 @@ def run_portfolio_backtest(
             exit_threshold=exit_threshold,
             stop_threshold=stop_threshold,
             size=gross,
+            cost_bps=cost_bps,
+            borrow_fee=borrow_fee,
             time_stop=time_stop,
             no_entry_from=no_entry_from,
             carry_in=carried.pop((pp.ticker_a, pp.ticker_b), None),

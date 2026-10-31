@@ -18,7 +18,8 @@ Sizing:
   sum(shares * price change), i.e. a return on $1 of capital.
 
 Costs: COST_BPS per leg on the dollar notional traded, at entry AND exit,
-  both included in Trade.pnl.
+  both included in Trade.pnl. borrow_fee, off by default, charges an annual
+  fee on the short notional for each day a position is held.
 
 Timing (no look-ahead):
   Every decision — entry, exit, stop — uses information up to the close of
@@ -96,6 +97,7 @@ def run_backtest(
     stop_threshold  : float | None = 3.5,
     size            : pd.Series = None,
     cost_bps        : float = COST_BPS,
+    borrow_fee      : float = 0.0,
     time_stop       : int | None = None,
     no_entry_from   : int | None = None,
     carry_in        : OpenPosition | None = None,
@@ -116,6 +118,8 @@ def run_backtest(
         size            : gross notional / capital per day (e.g. from
                           signals.sizing.vol_target_size). Defaults to 1.0.
         cost_bps        : one-way cost per leg, as a fraction of notional
+        borrow_fee      : annual fee on short notional, as a fraction, charged
+                          daily over 252 days on the prior close's value
         time_stop       : close a trade held this many trading days (carried
                           days included), exit_reason "time". Blocks re-entry
                           the way the stop does. None disables it.
@@ -163,6 +167,7 @@ def run_backtest(
         # ── Mark open position to market over (t-1, t] ───────────────────
         if position != FLAT:
             daily_pnl[t] += sh_a * (a[t] - a[t - 1]) + sh_b * (b[t] - b[t - 1])
+            daily_pnl[t] -= borrow_fee / 252 * (max(-sh_a, 0.0) * a[t - 1] + max(-sh_b, 0.0) * b[t - 1])
 
         signal_z = z[t - 1]   # everything below is decided on yesterday's close
         last_day = t == n - 1
