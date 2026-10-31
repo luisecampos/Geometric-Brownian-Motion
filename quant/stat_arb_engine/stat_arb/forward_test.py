@@ -37,6 +37,12 @@ result. Past the horizon it runs once and reports:
 Over one year, DSR >= 0.95 takes a Sharpe of about 1.7, so the likely good
 outcome is SUPPORTED, which would justify extending the horizon, not trading.
 Any change to the candidate restarts the clock on days it hasn't seen.
+
+The verdict stays at 2bp per leg with no borrow fee, as first committed. The run
+also reports the candidate's Sharpe at cost_test.py's REALISTIC level (5bp per
+leg, 0.50%/yr borrow), with no verdict attached. Added before HOLDOUT_START,
+because the candidate's break-even is 4.8bp to 7.3bp per leg, so a pass at 2bp
+alone wouldn't show a tradable edge.
 """
 
 import json
@@ -77,12 +83,14 @@ def verdict(sharpe: float, base_sharpe: float, dsr: float) -> str:
 
 def evaluate(prices: pd.DataFrame, cfg: dict):
     import main as M
+    from backtest.engine import COST_BPS
     from backtest.portfolio import ExitRules, prepare_pair_periods, run_portfolio_backtest
     from backtest.report import summary_stats
+    from cost_test import LEVELS
     from learn.evaluate import deflated_sharpe
     from pair_test import build_schedule
 
-    def run(selection, rules):
+    def run(selection, rules, cost_bps=COST_BPS, borrow_fee=0.0):
         schedule = [pp for pp in build_schedule(selection, prices)
                     if pp.period_start >= pd.Timestamp(HOLDOUT_START)]
         n_active = {}
@@ -94,7 +102,7 @@ def evaluate(prices: pd.DataFrame, cfg: dict):
         return run_portfolio_backtest(
             prices, schedule, lookback_window=M.LOOKBACK_WINDOW, entry_threshold=M.ENTRY_THRESHOLD,
             exit_threshold=M.EXIT_THRESHOLD, stop_threshold=M.STOP_THRESHOLD, signal=M.SIGNAL,
-            prepared=prepared, exit_rules=rules,
+            prepared=prepared, exit_rules=rules, cost_bps=cost_bps, borrow_fee=borrow_fee,
         )
 
     res = {
@@ -105,6 +113,10 @@ def evaluate(prices: pd.DataFrame, cfg: dict):
     dsr = deflated_sharpe(res[cfg["candidate"]].daily_pnl, [], 1)["dsr"]
     print(f"  {cfg['candidate']}: Sharpe {cand['sharpe']:.2f}, DSR {dsr:.2f}; baseline Sharpe {base['sharpe']:.2f}")
     print(f"  VERDICT (pre-registered rule): {verdict(cand['sharpe'], base['sharpe'], dsr)}")
+    cost, fee = LEVELS["REALISTIC"]
+    net = run(cfg.get("selection") or "baseline", ExitRules(**cfg["rules"]), cost, fee)
+    print(f"  Report only, no verdict: Sharpe {summary_stats(net)['sharpe']:.2f} at "
+          f"{cost * 1e4:.0f}bp per leg and {fee:.2%}/yr borrow")
     if cfg.get("exception"):
         print(f"  Declared exception: {cfg['exception']}")
 

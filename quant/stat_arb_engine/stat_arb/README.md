@@ -49,6 +49,8 @@ python oos_test.py              # pre-registered 2024-2026 test (see "Self-learn
 python exit_test.py              # pre-registered exit rules on 2019-2023; writes forward_config.json
 python pair_test.py              # pre-registered pair selection on 2019-2023; writes forward_config.json
 python news_test.py              # pre-registered 8-K entry filter; a first download needs SEC_USER_AGENT set
+python cost_test.py              # pre-registered cost levels on DISTANCE20, 2019-2023
+python past_test.py              # pre-registered DISTANCE20 on 2010-2017
 python forward_test.py           # forward holdout from 2026-11-02; shows no PnL before day 252
 
 # 4. Tests (synthetic-data checks for the Kalman filter and the engine's accounting)
@@ -73,6 +75,8 @@ stat_arb/
 ├── exit_test.py             # Pre-registered exit rules for trades that never revert
 ├── pair_test.py             # Pre-registered stricter pair selection
 ├── news_test.py             # Pre-registered firm-news entry filter (SEC 8-Ks)
+├── cost_test.py             # Pre-registered cost levels on DISTANCE20
+├── past_test.py             # Pre-registered DISTANCE20 on 2010-2017
 ├── forward_test.py          # Forward holdout from 2026-11-02, blinded until day 252
 ├── requirements.txt
 ├── data/
@@ -497,6 +501,9 @@ needed Sharpe > 0 and t >= 2.5. ALL has Sharpe 0.08 and t = 1.06, so
 `forward_test.py` is the holdout: from 2026-11-02, with the universe frozen
 before that date (so no survivorship bias), blinded until day 252, and judged
 once. A candidate adopted later can only be judged on days after it was frozen.
+Its verdict stays at 2bp per leg. It also reports the Sharpe at 5bp per leg and
+0.50%/yr borrow, with no verdict attached, a line added before the holdout began
+because the cost test below put break-even close to that level.
 
 ### Stricter pair selection (pre-registered, in-sample)
 
