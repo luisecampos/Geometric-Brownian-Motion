@@ -666,9 +666,9 @@ is -0.04, and the bar was above 0. The holdout runs anyway, as committed.
   assumed 5bp sits between them. The result turns on a cost that hasn't been
   measured. A real cost of 3bp and one of 7bp give different answers.
 - **The bias didn't rescue the baseline.** SCREEN lost in both samples: -0.31 at
-  2bp here, -3.2% a year gross. Survivorship can't be what separates the two, and
-  DISTANCE20 minus SCREEN has t = 1.97 at REALISTIC. The two run at different
-  vol, so read that t as rough.
+  2bp here, -3.2% a year gross. So the bias doesn't lift every book, though it
+  could still help DISTANCE20 more. DISTANCE20 minus SCREEN has t = 1.97 at
+  REALISTIC. The two run at different vol, so read that t as rough.
 - **No spin-off distortion.** No trade was open across a one-day move of 0.25 or
   more, so the unadjusted DHR spin-off did not touch this book.
 
