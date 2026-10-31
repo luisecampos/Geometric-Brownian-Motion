@@ -22,8 +22,8 @@ Out of the box it pulls **RIG, VAL, SLB, HP, NE** — the core offshore drilling
 # 1. Install dependencies
 pip install requests pandas openpyxl
 
-# 2. Open edgar_scraper.py and update line 34 with your real name + email
-USER_AGENT = "Your Name your@email.com"
+# 2. Set your real name + email in the environment
+export SEC_USER_AGENT="Your Name your@email.com"
 # SEC policy requires this — fake values will get you 403 blocked
 
 # 3. Run the scraper

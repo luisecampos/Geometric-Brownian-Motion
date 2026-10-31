@@ -15,7 +15,7 @@ import os
 import json
 import webbrowser
 
-USER_AGENT = "Luis Campos luisecampos7@gmail.com"  # ← update with your real name + email
+USER_AGENT = os.environ.get("SEC_USER_AGENT", "")  # your name + email, e.g. "Your Name your@email.com"
 
 CONCEPTS = {
     "Revenues":                        "us-gaap/Revenues",
@@ -42,6 +42,8 @@ TICKER_MAP_URL    = "https://www.sec.gov/files/company_tickers.json"
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 def headers():
+    if not USER_AGENT:
+        raise RuntimeError('Set SEC_USER_AGENT to your name and email, e.g. "Your Name your@email.com".')
     return {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"}
 
 def get_cik_map():
