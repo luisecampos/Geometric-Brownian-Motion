@@ -128,3 +128,4 @@ _UNIVERSE: dict[str, dict[str, list[str]]] = {
 SECTORS    = {t: s for s, groups in _UNIVERSE.items() for ts in groups.values() for t in ts}
 INDUSTRIES = {t: f"{s}/{g}" for s, groups in _UNIVERSE.items() for g, ts in groups.items() for t in ts}
 UNIVERSE   = list(SECTORS)
+SECTOR_ETFS = {s: groups["etf"][0] for s, groups in _UNIVERSE.items()}   # sector -> its ETF
