@@ -498,12 +498,53 @@ once. It does nothing while `forward_config.json` has no candidate. Those days
 stay unused until something passes `exit_test.py`-style selection first. A
 candidate adopted later can only be judged on days after it was frozen.
 
+### Stricter pair selection (pre-registered, in-sample)
+
+`exit_test.py` showed the losing trades lose however they close, so
+`pair_test.py` changes which pairs get entered and leaves trading alone. Its
+candidates and decision rule were committed before either method ran on market
+data. PERSIST2 and PERSIST4 keep a pair only if it also passed the screen in
+the previous 1 or 3 windows. DISTANCE20 is the distance method (Gatev,
+Goetzmann and Rouwenhorst, 2006): the 20 same-sector pairs whose rebased log
+prices stayed closest over the window, with a half-life of 5-60 days.
+
+PERSIST4 needs 3 earlier windows, so every row, baseline included, is measured
+from 2019-10-03 to 2023-12-29 (17 quarters). The DSR uses N = 85, SR0 = 1.08.
+
+| Selection | Sharpe | DSR | t vs baseline | Return | Vol | Max DD | Trades | Pair-periods |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | -0.18 | 0.00 | | -32.0% | 42.3% | -116.3% | 12,168 | 8,499 |
+| PERSIST2 | -0.07 | 0.01 | 0.43 | -6.7% | 22.7% | -71.3% | 3,518 | 2,432 |
+| PERSIST4 | 0.49 | 0.11 | 0.69 | +24.4% | 11.9% | -15.4% | 389 | 284 |
+| **DISTANCE20** | **0.67** | 0.20 | 0.75 | +32.1% | 11.3% | -15.8% | 499 | 340 |
+
+Sharpe by year (Q4 only for 2019), DISTANCE20: -0.21 / -0.37 / 1.65 / 0.56 /
+1.34; PERSIST4: -0.50 / -0.44 / 1.03 / 1.11 / 0.29.
+
+**Decision, by the pre-registered rule: DO NOT ADVANCE.** The best candidate
+needed Sharpe > 0 and t >= 2.4 against baseline, and DISTANCE20 has t = 0.75.
+
+- **Selection is the first lever that moves the Sharpe by much.** It rises as
+  the filter tightens, and these are the first books that aren't dominated by
+  the screen's 500 pairs a quarter. But 0.67 is still below the 0.84 the tuner
+  showed in-sample before losing out of sample, and the DSR is 0.20.
+- **The t-stat bar was badly chosen.** Candidates run at 11% vol and the
+  baseline at 42%, so the daily difference is mostly the baseline's noise and
+  that t has little power. It doesn't change the outcome: DISTANCE20's own t
+  against zero is about 1.4 (0.67 x sqrt(4.24 years)), also under 2.4. A better
+  rule for next time is the candidate's own t, or a volatility-matched difference.
+- **Few trades.** 499 trades over 17 quarters across 173 distinct pairs is
+  thin, and both candidates lost money in 2019 Q4 and 2020.
+
 ### Next steps (not done)
 
-- **Fix pair selection, where the losing trades come from.** At raw p<0.10
-  about three in four hits are chance (520 vs 384 expected). Require a pair
-  to pass in consecutive windows, or use a different selection method (e.g.
-  the distance method). Pre-register it and count the trials.
+- **Filter entries on news.** Engelberg, Gao and Jagannathan find that pairs
+  profits are lower when the gap comes from news about one stock, because that
+  gap tends to persist. Earnings dates and SEC 8-K filings, skipping entries
+  when a leg has fresh firm news, are the cheapest test of this. Every date
+  must be the time the news was public, not the period it describes.
+- **Judge DISTANCE20 on new data**, if it is frozen into the forward holdout as
+  a declared exception to the rule above.
 - **Change the model.** Trade each stock's residual against its sector ETF
   (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal

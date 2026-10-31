@@ -1,7 +1,8 @@
 {
   "candidate": null,
+  "selection": null,
   "rules": null,
-  "best_tested": "ALL",
-  "sharpe_2019_2023": 0.0787,
-  "t_vs_baseline": 1.0607
+  "best_tested": "DISTANCE20",
+  "sharpe_2019_2023": 0.6724,
+  "t_vs_baseline": 0.7468
 }
