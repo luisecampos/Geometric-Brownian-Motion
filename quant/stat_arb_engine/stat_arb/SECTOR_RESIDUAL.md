@@ -1,7 +1,10 @@
 # Sector-ETF residual model: design
 
-Status: pre-registered 2026-10-31. Committed before any signal or PnL from this
+Status: pre-registered 2026-10-31 in a0d2f5a, before any signal or PnL from this
 model ran on real prices. `residual_test.py` carries the rules that bind the run.
+
+**Result: ADVANCE: NO.** Sharpe at REALISTIC was -0.24 on 2010-2017 and -0.59 on
+2019-2023, against a bar of 1.0 in both. Stage 2 did not run. See the README.
 
 ## Question
 
