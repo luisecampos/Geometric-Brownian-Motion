@@ -65,6 +65,27 @@ class PortfolioResults:
         return (total - k) / (k * k - k)
 
 
+@dataclass(frozen=True)
+class ExitRules:
+    """
+    Optional rules for trades that haven't reverted (see exit_test.py). Both
+    multiples are of the pair's half-life on its selection window.
+
+    late_entry_mult: no new entry with fewer than mult x half-life trading
+        days left in the period.
+    time_stop_mult : close a trade after mult x half-life trading days held.
+    carry          : a position open at period end stays open if the same
+        pair is selected for the next period. The next selection uses the
+        period_end close, so it is only known after that close; a position
+        in a pair that is NOT re-selected therefore closes one day later, at
+        the first close of the next period. The next period's Kalman fit
+        and z-score take over for the exit, the shares stay as entered.
+    """
+    late_entry_mult: float | None = None
+    time_stop_mult : float | None = None
+    carry          : bool = False
+
+
 @dataclass
 class PreparedPair:
     """One pair-period's causal inputs: selection window + active period."""
@@ -174,6 +195,7 @@ def run_portfolio_backtest(
     train_window    : int = 252,
     prepared        : list[PreparedPair] | None = None,
     size_multipliers: dict | None = None,
+    exit_rules      : ExitRules | None = None,
 ) -> PortfolioResults:
     """
     Run the full pipeline (Kalman hedge ratio -> z-score -> vol-target sizing
@@ -193,6 +215,8 @@ def run_portfolio_backtest(
         indexed by DECISION date (the close the engine decides on) and
         multiplies size there; 0 means "don't enter". This is the hook the
         learning layer uses to skip or resize trades.
+    exit_rules: optional ExitRules. None (or all defaults) leaves every
+        result unchanged.
 
     PnL is a return on book capital: each pair's daily_pnl is its return on
     the whole book, so the portfolio return is their sum.
@@ -200,6 +224,12 @@ def run_portfolio_backtest(
     if prepared is None:
         prepared = prepare_pair_periods(prices, pair_schedule, target_daily_vol, train_window)
     size_multipliers = size_multipliers or {}
+    rules = exit_rules or ExitRules()
+    if rules.carry:
+        starts = [prep.pp.period_start for prep in prepared]
+        assert starts == sorted(starts), "carry needs pair-periods in time order"
+    selected = {(p.pp.ticker_a, p.pp.ticker_b, p.pp.period_start) for p in prepared}
+    carried: dict = {}         # (ticker_a, ticker_b) -> OpenPosition
 
     per_pair  : dict = {}
     pair_pnl_cols: dict[str, pd.Series] = {}
@@ -220,15 +250,44 @@ def run_portfolio_backtest(
         # on [t-1]). The engine can't enter on its own first row, so no
         # position is ever opened before period_start.
         active = slice(prep.first, None)
+        series_a, series_b = prep.series_a.iloc[active], prep.series_b.iloc[active]
+        hedge, z, gross = prep.kf.hedge_ratio.iloc[active], zscores.iloc[active], size.iloc[active]
+        n = len(series_a)
+
+        no_entry_from = None
+        if rules.late_entry_mult is not None:
+            no_entry_from = n - int(np.ceil(rules.late_entry_mult * pp.half_life))
+        time_stop = None
+        if rules.time_stop_mult is not None:
+            time_stop = int(np.ceil(rules.time_stop_mult * pp.half_life))
+
+        carry_out = False
+        if rules.carry:
+            pos = prices.index.get_loc(pp.period_end) + 1
+            nxt = prices.index[pos] if pos < len(prices.index) else None
+            carry_out = nxt is not None and (pp.ticker_a, pp.ticker_b, nxt) in selected
+            if nxt is not None and not carry_out:
+                # One more row, for the close of any open position. Its z /
+                # hedge / size are never read: the engine acts on [t-1] and
+                # no entry is allowed here or on period_end, as usual.
+                no_entry_from = min(n - 1, n if no_entry_from is None else no_entry_from)
+                series_a = pd.concat([series_a, prices[pp.ticker_a].iloc[[pos]]])
+                series_b = pd.concat([series_b, prices[pp.ticker_b].iloc[[pos]]])
+                hedge, z, gross = (x.reindex(series_a.index) for x in (hedge, z, gross))
 
         results = run_backtest(
-            prep.series_a.iloc[active], prep.series_b.iloc[active],
-            prep.kf.hedge_ratio.iloc[active], zscores.iloc[active],
+            series_a, series_b, hedge, z,
             entry_threshold=entry_threshold,
             exit_threshold=exit_threshold,
             stop_threshold=stop_threshold,
-            size=size.iloc[active],
+            size=gross,
+            time_stop=time_stop,
+            no_entry_from=no_entry_from,
+            carry_in=carried.pop((pp.ticker_a, pp.ticker_b), None),
+            carry_out=carry_out,
         )
+        if results.open_position is not None:
+            carried[(pp.ticker_a, pp.ticker_b)] = results.open_position
 
         per_pair[(pp.ticker_a, pp.ticker_b, pp.period_start)] = results
         pair_pnl_cols[prep.label] = results.daily_pnl
