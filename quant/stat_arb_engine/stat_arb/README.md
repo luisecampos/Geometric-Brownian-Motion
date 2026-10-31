@@ -439,8 +439,71 @@ plus one regime, which is what its 0.24 DSR said. Every configuration in
 this README now loses money out of sample. The 2 trials are added to
 `EXTRA_TRIALS`.
 
+### Exit rules for trades that never revert (pre-registered, in-sample)
+
+The baseline's exit breakdown suggested the losses were an exit problem:
+
+| Baseline, summed per-trade return on book | Signal exits | Period-end exits | Stops |
+|---|---:|---:|---:|
+| 2019-2023 | +460% (76% win) | -331% (28% win) | -164% (21% win) |
+| 2024-2026 | +233% (78% win) | -164% (28% win) | -97% (21% win) |
+
+`exit_test.py` fixes three rules, and a mechanical decision, in its docstring,
+committed before any of them ran on market data. Each multiple is 2 x the
+pair's selection-window half-life (the existing `HOLD_MULTIPLE`), not searched.
+LATE refuses entries with fewer than 2 half-lives left in the period. TIME
+closes a trade after 2 half-lives held. CARRY keeps a position open if the
+pair is selected again, closing it one day after period end if not, because
+the next selection is only known after the period_end close. This run is
+in-sample, since the idea came from this same data. A pass would only have
+earned a place in the forward holdout.
+
+Same 9,836 pair-periods, e=2 x=0.5 lb=60. The DSR uses N = 82 (78 before, plus
+these 4), SR0 = 1.06. The t-stat is on the daily PnL difference from baseline.
+
+| Rule | Sharpe | DSR | t vs baseline | Return | Vol | Max DD | Trades | Win % |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | -0.18 | 0.00 | | -35.6% | 40.1% | -118.7% | 13,852 | 57.8% |
+| LATE | -0.10 | 0.00 | 0.66 | -16.1% | 33.4% | -103.3% | 10,407 | 59.9% |
+| TIME | -0.06 | 0.01 | 0.95 | -11.0% | 35.8% | -88.2% | 14,788 | 53.8% |
+| CARRY | -0.16 | 0.00 | 0.24 | -32.8% | 40.1% | -112.0% | 13,521 | 58.6% |
+| **ALL** | **0.08** | 0.01 | 1.06 | +11.1% | 28.2% | -68.1% | 11,054 | 54.6% |
+
+**Decision, by the pre-registered rule: DO NOT ADVANCE.** The best candidate
+needed Sharpe > 0 and t >= 2.5. ALL has Sharpe 0.08 and t = 1.06, so
+`forward_config.json` names no candidate and the holdout stays unspent.
+
+- **The exit table was misleading, and the fix shows why.** An exit reason is
+  decided by how the trade turned out. A trade that reverts is called a signal
+  exit, and one that doesn't gets another label, so "signal exits make money"
+  is close to true by construction. TIME shows this. It cuts period-end losses
+  from -331% to -69%, but its time-stopped trades lose -367%. The losing trades
+  lose about the same however they are closed. The problem is entering them, so
+  it sits upstream of the exit rules, in pair selection or the signal.
+- **CARRY does almost nothing.** Most open positions aren't in a re-selected
+  pair: period-end exits only fall from 3,518 to 2,683, and PnL hardly moves.
+- **ALL is LATE plus TIME.** With both on, every trade has room to reach its
+  time stop before the period ends, so no position is ever open at period end
+  and CARRY has nothing to act on. That is why TIME and ALL have an identical
+  time-stop line (4,877 trades, -366.7%).
+- **What did improve is risk.** ALL's vol is 28% against 40%, and its drawdown
+  is -68% against -119%. That is a real, small benefit of holding less, but it
+  was not what the test was for and it doesn't make the strategy profitable.
+
+`forward_test.py` is ready: a holdout from 2026-11-02, with the universe frozen
+before that date (so no survivorship bias), blinded until day 252, and judged
+once. It does nothing while `forward_config.json` has no candidate. Those days
+stay unused until something passes `exit_test.py`-style selection first. A
+candidate adopted later can only be judged on days after it was frozen.
+
 ### Next steps (not done)
 
+- **Fix pair selection, where the losing trades come from.** At raw p<0.10
+  about three in four hits are chance (520 vs 384 expected). Require a pair
+  to pass in consecutive windows, or use a different selection method (e.g.
+  the distance method). Pre-register it and count the trials.
+- **Change the model.** Trade each stock's residual against its sector ETF
+  (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal
   beats its own quarter's median, or gate on within-quarter rank instead of
   an absolute p. Sample-uniqueness weights (AFML ch. 4) would also stop one
