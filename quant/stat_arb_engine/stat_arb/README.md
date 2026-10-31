@@ -544,13 +544,50 @@ reasoning that new days arrive regardless and only they can settle it.
 the holdout's verdict prints with that note. It is judged once, after 252
 trading days (around November 2027).
 
+### Firm-news entry filter from SEC 8-Ks (pre-registered, in-sample)
+
+Engelberg, Gao and Jagannathan find pairs profits are lower when a gap comes
+from news about one stock, because such a gap tends to persist. `news_test.py`
+skips an entry when either leg filed an earnings 8-K (EARN, item 2.02) or any
+8-K (NEWS) within the last 5 trading days. `data/events.py` dates each filing
+by when EDGAR accepted it, so a filing only counts from the first close that
+could have reacted to it. Coverage is 39,448 8-Ks across 281 names, a median of
+4.0 earnings filings a year. BLK and XOM have no item 2.02 filing in 2019-2023
+and APA has about 2 a year, so EARN misses those.
+
+2019-2023, full period. The DSR uses N = 89, SR0 = 1.10. The t-stat is the
+paired t against the same book unfiltered.
+
+| Config | Sharpe | DSR | t vs unfiltered | Return | Vol | Max DD | Trades | Win % |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SCREEN (the baseline) | -0.18 | 0.00 | | -35.6% | 40.1% | -118.7% | 13,852 | 57.8% |
+| SCREEN + EARN | -0.13 | 0.00 | 0.82 | -25.1% | 38.1% | -111.2% | 12,562 | 57.8% |
+| SCREEN + NEWS | -0.12 | 0.00 | 0.68 | -20.7% | 33.5% | -89.7% | 10,684 | 57.7% |
+| DISTANCE20 | 0.70 | 0.19 | | +40.0% | 11.4% | -16.7% | 600 | 60.3% |
+| DISTANCE20 + EARN | 0.80 | 0.25 | 0.73 | +44.5% | 11.2% | -13.1% | 555 | 61.6% |
+| DISTANCE20 + NEWS | 0.51 | 0.09 | -1.28 | +25.8% | 10.2% | -13.4% | 435 | 60.5% |
+
+**Decision, by the pre-registered rule: DO NOT ADVANCE.** EARN had the higher
+t on SCREEN but needed t >= 2.24 and has 0.82, so stage 2 never ran and no news
+data has touched 2024-2026. DISTANCE20 alone stays in the holdout.
+
+- **The paper's effect shows up, and it isn't enough.** Of the unfiltered
+  baseline's -35.6%, trades that EARN would skip account for -35.0%: 3,414
+  trades, a quarter of the book. The other 10,438 total -0.6%.
+- **Those other trades earn nothing.** Avoiding news takes the book to about
+  zero, not above it. The screen's pairs have no edge left to reveal.
+- **Skipping recovers little of it.** The filtered book gains +10.5%, not +35%.
+  Of the 3,414 entries skipped, only 1,290 trades disappear: the rest are
+  entered a few days later, once the block lifts, while the gap is still open.
+- **NEWS is too broad for the small book.** It helps SCREEN slightly but cuts
+  DISTANCE20 from 0.70 to 0.51. Most 8-Ks aren't price-moving news.
+
 ### Next steps (not done)
 
-- **Filter entries on news.** Engelberg, Gao and Jagannathan find that pairs
-  profits are lower when the gap comes from news about one stock, because that
-  gap tends to persist. Earnings dates and SEC 8-K filings, skipping entries
-  when a leg has fresh firm news, are the cheapest test of this. Every date
-  must be the time the news was public, not the period it describes.
+- **Test DISTANCE20 on 2010-2017.** Nothing in this project has used those
+  years, so this needs no waiting for the holdout. The universe's survivorship
+  bias is worse that far back, so treat a pass as support, not proof.
+- **Test costs.** Every result here assumes 2bp per leg and no short-borrow fee.
 - **Change the model.** Trade each stock's residual against its sector ETF
   (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal
