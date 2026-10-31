@@ -8,7 +8,8 @@ the exit rules, so it can't judge them. Every trading day from HOLDOUT_START
 on is new. This file was committed before that date.
 
 Frozen:
-  candidate   forward_config.json, written by exit_test.py and never by hand.
+  candidate   forward_config.json, written by exit_test.py or pair_test.py and
+              never by hand.
               If its candidate is null, nothing is under test and the holdout
               stays unspent.
   universe    main.py's UNIVERSE as of this commit. It is fixed before the
@@ -16,8 +17,9 @@ Frozen:
               survivorship bias. A name that later delists keeps its last
               price, and the run reports it.
   setup       main.py's wide default, e=2 x=0.5 lb=60, no learning layer.
-              Pair selection walks forward from the 252 trading days before
-              HOLDOUT_START.
+              Pair selection walks forward from before HOLDOUT_START, with
+              enough lead for a persistence filter to have its history. Only
+              periods starting on or after HOLDOUT_START count.
   horizon     HOLDOUT_DAYS trading days, about a year. One evaluation.
 
 Blinding: until the horizon is reached this script reports only how many days
@@ -45,17 +47,19 @@ import pandas as pd
 
 HOLDOUT_START = "2026-11-02"   # first trading day after this file was committed
 HOLDOUT_DAYS  = 252
-DATA_START    = "2025-06-01"   # more than 252 trading days before HOLDOUT_START
+LEAD_WINDOWS  = 3              # earlier rebalances, for a persistence filter
+DATA_START    = "2024-12-01"   # more than 252 + 3 x 63 trading days before HOLDOUT_START
 MAX_MISSING   = 0.5            # keep names that delist mid-holdout (ffilled)
 FORWARD_CONFIG = "forward_config.json"
 
 
-def frame_for_holdout(prices: pd.DataFrame, train_window: int) -> pd.DataFrame:
-    """Trim history so the first walk-forward period starts on the holdout's first day."""
+def frame_for_holdout(prices: pd.DataFrame, lead: int) -> pd.DataFrame:
+    """Trim history so `lead` days precede the holdout's first day, which then
+    falls on a walk-forward rebalance if lead = train window + k x test window."""
     first = int(prices.index.searchsorted(pd.Timestamp(HOLDOUT_START)))
-    if first < train_window:
-        raise ValueError(f"need {train_window} days before {HOLDOUT_START}, have {first}")
-    return prices.iloc[first - train_window:]
+    if first < lead:
+        raise ValueError(f"need {lead} days before {HOLDOUT_START}, have {first}")
+    return prices.iloc[first - lead:]
 
 
 def verdict(sharpe: float, base_sharpe: float, dsr: float) -> str:
@@ -68,32 +72,30 @@ def verdict(sharpe: float, base_sharpe: float, dsr: float) -> str:
 
 def evaluate(prices: pd.DataFrame, cfg: dict):
     import main as M
-    from signals.walkforward import generate_pair_schedule
     from backtest.portfolio import ExitRules, prepare_pair_periods, run_portfolio_backtest
     from backtest.report import summary_stats
     from learn.evaluate import deflated_sharpe
+    from pair_test import build_schedule
 
-    schedule = generate_pair_schedule(
-        prices, prices.columns.tolist(), M.TRAIN_WINDOW, M.TEST_WINDOW,
-        M.PVALUE_CUTOFF, M.MULTIPLE_TESTING, M.MIN_HALF_LIFE, M.MAX_HALF_LIFE,
-        verbose=False, sectors=M.PAIR_SECTORS, n_jobs=M.N_JOBS, cache_dir=M.CACHE_DIR,
-    )
-    first = min(pp.period_start for pp in schedule)
-    assert first >= pd.Timestamp(HOLDOUT_START), f"a period starts before the holdout: {first.date()}"
-    n_active = {}
-    for pp in schedule:
-        n_active[pp.period_start] = n_active.get(pp.period_start, 0) + 1
-    target_vol = {T: M.BOOK_DAILY_VOL / np.sqrt(k) for T, k in n_active.items()}
-    prepared = prepare_pair_periods(prices, schedule, target_vol, M.TRAIN_WINDOW,
-                                    n_jobs=M.N_JOBS, cache_dir=M.CACHE_DIR)
-
-    res = {}
-    for name, rules in {cfg["candidate"]: ExitRules(**cfg["rules"]), "baseline": ExitRules()}.items():
-        res[name] = run_portfolio_backtest(
+    def run(selection, rules):
+        schedule = [pp for pp in build_schedule(selection, prices)
+                    if pp.period_start >= pd.Timestamp(HOLDOUT_START)]
+        n_active = {}
+        for pp in schedule:
+            n_active[pp.period_start] = n_active.get(pp.period_start, 0) + 1
+        target_vol = {T: M.BOOK_DAILY_VOL / np.sqrt(k) for T, k in n_active.items()}
+        prepared = prepare_pair_periods(prices, schedule, target_vol, M.TRAIN_WINDOW,
+                                        n_jobs=M.N_JOBS, cache_dir=M.CACHE_DIR)
+        return run_portfolio_backtest(
             prices, schedule, lookback_window=M.LOOKBACK_WINDOW, entry_threshold=M.ENTRY_THRESHOLD,
             exit_threshold=M.EXIT_THRESHOLD, stop_threshold=M.STOP_THRESHOLD, signal=M.SIGNAL,
             prepared=prepared, exit_rules=rules,
         )
+
+    res = {
+        cfg["candidate"]: run(cfg.get("selection") or "baseline", ExitRules(**cfg["rules"])),
+        "baseline": run("baseline", ExitRules()),
+    }
     cand, base = summary_stats(res[cfg["candidate"]]), summary_stats(res["baseline"])
     dsr = deflated_sharpe(res[cfg["candidate"]].daily_pnl, [], 1)["dsr"]
     print(f"  {cfg['candidate']}: Sharpe {cand['sharpe']:.2f}, DSR {dsr:.2f}; baseline Sharpe {base['sharpe']:.2f}")
@@ -118,14 +120,15 @@ def main():
     end = (today + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     prices = fetch_prices(M.UNIVERSE, DATA_START, end, max_missing=MAX_MISSING)
     stale = [c for c in prices.columns if prices[c].iloc[-5:].nunique() == 1]
-    frame = frame_for_holdout(prices, M.TRAIN_WINDOW)
+    lead = M.TRAIN_WINDOW + LEAD_WINDOWS * M.TEST_WINDOW
+    frame = frame_for_holdout(prices, lead)
     elapsed = int((frame.index >= pd.Timestamp(HOLDOUT_START)).sum())
     print(f"Candidate {cfg['candidate']}. Holdout: {elapsed}/{HOLDOUT_DAYS} days.")
     if stale:
         print(f"  No recent price (delisted or halted, held flat): {stale}")
     if elapsed < HOLDOUT_DAYS:
         return
-    evaluate(frame.iloc[:M.TRAIN_WINDOW + HOLDOUT_DAYS], cfg)
+    evaluate(frame.iloc[:lead + HOLDOUT_DAYS], cfg)
 
 
 if __name__ == "__main__":

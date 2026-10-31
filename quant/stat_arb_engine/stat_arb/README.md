@@ -47,6 +47,7 @@ python main.py
 python oos_test.py              # pre-registered 2024-2026 test (see "Self-learning layer")
 # Both write CSV tables for the results dashboard to outputs/dashboard/
 python exit_test.py              # pre-registered exit rules on 2019-2023; writes forward_config.json
+python pair_test.py              # pre-registered pair selection on 2019-2023; writes forward_config.json
 python forward_test.py           # forward holdout from 2026-11-02; shows no PnL before day 252
 
 # 4. Tests (synthetic-data checks for the Kalman filter and the engine's accounting)
@@ -69,6 +70,7 @@ stat_arb/
 ├── main.py                  # Entry point + config
 ├── oos_test.py              # Pre-registered 2024-2026 out-of-sample test (x=0)
 ├── exit_test.py             # Pre-registered exit rules for trades that never revert
+├── pair_test.py             # Pre-registered stricter pair selection
 ├── forward_test.py          # Forward holdout from 2026-11-02, blinded until day 252
 ├── requirements.txt
 ├── data/

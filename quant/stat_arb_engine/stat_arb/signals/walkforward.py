@@ -97,6 +97,13 @@ def select_pairs(
     raise ValueError(f"unknown multiple_testing: {multiple_testing!r}")
 
 
+def _candidate_pairs(tickers: list[str], sectors: dict | None) -> list[tuple]:
+    if sectors is None:
+        return list(combinations(tickers, 2))
+    return [(a, b) for a, b in combinations(tickers, 2)
+            if sectors.get(a) is not None and sectors.get(a) == sectors.get(b)]
+
+
 def generate_pair_schedule(
     prices           : pd.DataFrame,
     universe         : list[str],
@@ -134,11 +141,7 @@ def generate_pair_schedule(
     n      = len(dates)
 
     tickers = log_px.columns.tolist()
-    if sectors is None:
-        pairs = list(combinations(tickers, 2))
-    else:
-        pairs = [(a, b) for a, b in combinations(tickers, 2)
-                 if sectors.get(a) is not None and sectors.get(a) == sectors.get(b)]
+    pairs = _candidate_pairs(tickers, sectors)
     pos = {t: k for k, t in enumerate(tickers)}
 
     # Every window's train slice, then all Engle-Granger tests in one pass:
@@ -214,5 +217,77 @@ def generate_pair_schedule(
             print(f"      {period_start.date()}: {raw:>3d} raw p<{pvalue_cutoff}"
                   f"  -> {len(passed):>2d} after {multiple_testing or 'no'} correction"
                   f"  -> {kept:>2d} after half-life filter")
+
+    return schedule
+
+
+def persistent_pairs(schedule: list[PairPeriod], windows: int = 2) -> list[PairPeriod]:
+    """
+    Keep a pair-period only if the same pair is also in the schedule in each
+    of the previous `windows - 1` rebalances. Rebalances are the schedule's
+    own period starts, so nothing survives in the first `windows - 1` of
+    them. Causal: it only looks backwards.
+    """
+    starts = sorted({pp.period_start for pp in schedule})
+    index = {T: k for k, T in enumerate(starts)}
+    present = {(pp.ticker_a, pp.ticker_b, index[pp.period_start]) for pp in schedule}
+    return [pp for pp in schedule
+            if all((pp.ticker_a, pp.ticker_b, index[pp.period_start] - k) in present
+                   for k in range(1, windows))]
+
+
+def distance_schedule(
+    prices        : pd.DataFrame,
+    universe      : list[str],
+    train_window  : int   = 252,
+    test_window   : int   = 63,
+    top_n         : int   = 20,
+    min_half_life : float = 5.0,
+    max_half_life : float = 60.0,
+    sectors       : dict | None = None,
+) -> list[PairPeriod]:
+    """
+    The distance method (Gatev, Goetzmann and Rouwenhorst, 2006) on the same
+    rolling windows as generate_pair_schedule: rank candidate pairs by the
+    sum of squared differences of their log prices, each rebased to 0 at the
+    start of the train window, and take the `top_n` closest whose half-life
+    is in range. No cointegration test, so `pvalue` is NaN.
+    """
+    log_px = np.log(prices[universe].dropna())
+    dates  = log_px.index
+    n      = len(dates)
+
+    tickers = log_px.columns.tolist()
+    pairs = _candidate_pairs(tickers, sectors)
+    pos = {t: k for k, t in enumerate(tickers)}
+    ia = np.array([pos[a] for a, _ in pairs])
+    ib = np.array([pos[b] for _, b in pairs])
+
+    schedule: list[PairPeriod] = []
+    start = train_window
+    while start < n:
+        end = min(start + test_window, n)
+        train = log_px.values[start - train_window : start]
+        x = train - train[0]
+        ssd = ((x[:, ia] - x[:, ib]) ** 2).sum(axis=0)
+
+        kept = 0
+        for k in np.argsort(ssd, kind="stable"):
+            hl = spread_half_life(train[:, ia[k]], train[:, ib[k]])
+            if not (min_half_life <= hl <= max_half_life):
+                continue
+            schedule.append(PairPeriod(
+                ticker_a     = pairs[k][0],
+                ticker_b     = pairs[k][1],
+                pvalue       = float("nan"),
+                period_start = dates[start],
+                period_end   = dates[end - 1],
+                train_start  = dates[start - train_window],
+                half_life    = hl,
+            ))
+            kept += 1
+            if kept == top_n:
+                break
+        start = end
 
     return schedule
