@@ -625,13 +625,58 @@ verdict stays at 2bp, but a 2bp pass there would not show a tradable edge.
 - **These numbers are still optimistic.** The 0.70 is in-sample and was the best
   of 3 candidates, every fill is at the close, and costs don't grow with size.
 
+### DISTANCE20 on 2010-2017 (pre-registered, unused years)
+
+`past_test.py` runs the holdout's book on eight years this project had never
+used, at the same four cost levels. It uses 271 of the 300 names, 32 quarters,
+974 trades. The universe is today's list, so the survivorship bias is worse here
+than in any later sample. The DSR is over 1 trial, N rises to 90.
+
+| Sharpe at | 2010-2017 | DSR | 2019-2023 |
+|---|---:|---:|---:|
+| FREE (0bp) | 0.83 | 0.99 | 0.94 |
+| CURRENT (2bp) | 0.53 | 0.93 | 0.70 |
+| REALISTIC (5bp, 0.50%/yr) | -0.04 | 0.46 | 0.27 |
+| HARSH (10bp, 1.00%/yr) | -0.89 | 0.01 | -0.40 |
+
+| Economics | 2010-2017 | 2019-2023 |
+|---|---:|---:|
+| Gross PnL a year | +8.9% | +10.7% |
+| Trades a year | 122 | 120 |
+| Capital traded a year | 163x | 134x |
+| Average short notional | 2.25x | 1.88x |
+| Break-even per leg, with borrow | 4.8bp | 7.3bp |
+
+Sharpe by year:
+
+| DISTANCE20 at | 2010 | 2011 | 2012 | 2013 | 2014 | 2015 | 2016 | 2017 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FREE | 0.66 | 0.08 | 0.64 | 0.56 | 1.17 | 1.04 | 0.67 | 1.93 |
+| CURRENT | 0.43 | -0.18 | 0.33 | 0.23 | 0.90 | 0.74 | 0.32 | 1.51 |
+| REALISTIC | -0.02 | -0.64 | -0.25 | -0.38 | 0.41 | 0.17 | -0.32 | 0.74 |
+
+**Decision, by the pre-registered rule: NOT SUPPORTED.** At REALISTIC the Sharpe
+is -0.04, and the bar was above 0. The holdout runs anyway, as committed.
+
+- **The gross edge repeated.** A book chosen on 2019-2023 made money before costs
+  in all eight unused years, and its Sharpe of 0.83 is close to the 0.94 it was
+  chosen on. That is the best evidence in this project, but survivorship bias
+  flatters it, so it does not show a real edge.
+- **Costs decide it.** Break-even is 4.8bp here and 7.3bp on 2019-2023, so the
+  assumed 5bp sits between them. The result turns on a cost that hasn't been
+  measured. A real cost of 3bp and one of 7bp give different answers.
+- **The bias didn't rescue the baseline.** SCREEN lost in both samples: -0.31 at
+  2bp here, -3.2% a year gross. Survivorship can't be what separates the two, and
+  DISTANCE20 minus SCREEN has t = 1.97 at REALISTIC. The two run at different
+  vol, so read that t as rough.
+- **No spin-off distortion.** No trade was open across a one-day move of 0.25 or
+  more, so the unadjusted DHR spin-off did not touch this book.
+
 ### Next steps (not done)
 
-- **Test DISTANCE20 on 2010-2017.** Nothing in this project has used those
-  years, so this needs no waiting for the holdout. The universe's survivorship
-  bias is worse that far back, so treat a pass as support, not proof.
 - **Measure real costs.** REALISTIC is an assumption. Paper fills on these names
-  would show the true cost, which matters because break-even is about 7bp.
+  would show the true cost, which now decides the result: break-even is 4.8bp
+  to 7.3bp per leg.
 - **Earn more per trade.** Scaling down doesn't help, because PnL and costs
   shrink together. A wider entry band might, and would count as a new trial.
 - **Change the model.** Trade each stock's residual against its sector ETF
