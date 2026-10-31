@@ -8,10 +8,13 @@ the exit rules, so it can't judge them. Every trading day from HOLDOUT_START
 on is new. This file was committed before that date.
 
 Frozen:
-  candidate   forward_config.json, written by exit_test.py or pair_test.py and
-              never by hand.
-              If its candidate is null, nothing is under test and the holdout
-              stays unspent.
+  candidate   forward_frozen.json if it exists, otherwise forward_config.json.
+              forward_config.json is written by exit_test.py or pair_test.py,
+              never by hand. If its candidate is null, nothing is under test
+              and the holdout stays unspent.
+              forward_frozen.json is for a declared exception: a candidate that
+              failed its bar and was frozen anyway. It says so in its own
+              "exception" field, and the verdict is printed with it.
   universe    main.py's UNIVERSE as of this commit. It is fixed before the
               holdout starts, so unlike every earlier sample this one has no
               survivorship bias. A name that later delists keeps its last
@@ -37,6 +40,7 @@ Any change to the candidate restarts the clock on days it hasn't seen.
 """
 
 import json
+import os
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -51,6 +55,7 @@ LEAD_WINDOWS  = 3              # earlier rebalances, for a persistence filter
 DATA_START    = "2024-12-01"   # more than 252 + 3 x 63 trading days before HOLDOUT_START
 MAX_MISSING   = 0.5            # keep names that delist mid-holdout (ffilled)
 FORWARD_CONFIG = "forward_config.json"
+FORWARD_FROZEN = "forward_frozen.json"
 
 
 def frame_for_holdout(prices: pd.DataFrame, lead: int) -> pd.DataFrame:
@@ -100,10 +105,13 @@ def evaluate(prices: pd.DataFrame, cfg: dict):
     dsr = deflated_sharpe(res[cfg["candidate"]].daily_pnl, [], 1)["dsr"]
     print(f"  {cfg['candidate']}: Sharpe {cand['sharpe']:.2f}, DSR {dsr:.2f}; baseline Sharpe {base['sharpe']:.2f}")
     print(f"  VERDICT (pre-registered rule): {verdict(cand['sharpe'], base['sharpe'], dsr)}")
+    if cfg.get("exception"):
+        print(f"  Declared exception: {cfg['exception']}")
 
 
 def main():
-    with open(FORWARD_CONFIG, encoding="utf-8") as f:
+    path = FORWARD_FROZEN if os.path.exists(FORWARD_FROZEN) else FORWARD_CONFIG
+    with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     if cfg["candidate"] is None:
         print(f"No candidate advanced (best tested: {cfg['best_tested']}). Holdout unspent; nothing to do.")

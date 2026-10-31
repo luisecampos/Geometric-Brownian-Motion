@@ -492,11 +492,9 @@ needed Sharpe > 0 and t >= 2.5. ALL has Sharpe 0.08 and t = 1.06, so
   is -68% against -119%. That is a real, small benefit of holding less, but it
   was not what the test was for and it doesn't make the strategy profitable.
 
-`forward_test.py` is ready: a holdout from 2026-11-02, with the universe frozen
+`forward_test.py` is the holdout: from 2026-11-02, with the universe frozen
 before that date (so no survivorship bias), blinded until day 252, and judged
-once. It does nothing while `forward_config.json` has no candidate. Those days
-stay unused until something passes `exit_test.py`-style selection first. A
-candidate adopted later can only be judged on days after it was frozen.
+once. A candidate adopted later can only be judged on days after it was frozen.
 
 ### Stricter pair selection (pre-registered, in-sample)
 
@@ -536,6 +534,14 @@ needed Sharpe > 0 and t >= 2.4 against baseline, and DISTANCE20 has t = 0.75.
 - **Few trades.** 499 trades over 17 quarters across 173 distinct pairs is
   thin, and both candidates lost money in 2019 Q4 and 2020.
 
+**Declared exception: DISTANCE20 is frozen into the forward holdout anyway.**
+It failed the bar above, and `forward_config.json` still records that. The
+decision to test it on new data was made after seeing these results, on the
+reasoning that new days arrive regardless and only they can settle it.
+`forward_frozen.json` holds the candidate, the reason and the code commit, and
+the holdout's verdict prints with that note. It is judged once, after 252
+trading days (around November 2027).
+
 ### Next steps (not done)
 
 - **Filter entries on news.** Engelberg, Gao and Jagannathan find that pairs
@@ -543,8 +549,6 @@ needed Sharpe > 0 and t >= 2.4 against baseline, and DISTANCE20 has t = 0.75.
   gap tends to persist. Earnings dates and SEC 8-K filings, skipping entries
   when a leg has fresh firm news, are the cheapest test of this. Every date
   must be the time the news was public, not the period it describes.
-- **Judge DISTANCE20 on new data**, if it is frozen into the forward holdout as
-  a declared exception to the rule above.
 - **Change the model.** Trade each stock's residual against its sector ETF
   (Avellaneda-Lee) instead of pairs.
 - **Normalise the base rate out of the labels**: predict whether a signal
