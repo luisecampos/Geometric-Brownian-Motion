@@ -1,5 +1,8 @@
 # Stat-Arb Pairs Trading Engine
 
+New here, or not a coder? [START_HERE.md](START_HERE.md) explains the project in
+plain English.
+
 A realistic **portfolio** pairs trading system built the way quant research
 desks do it: not one pair picked once, but a walk-forward schedule of pairs
 that re-qualifies every quarter, sized by volatility, and combined into a
