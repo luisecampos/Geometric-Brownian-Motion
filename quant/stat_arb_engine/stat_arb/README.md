@@ -1,5 +1,8 @@
 # Stat-Arb Pairs Trading Engine
 
+New here, or not a coder? [START_HERE.md](START_HERE.md) explains the project in
+plain English.
+
 A realistic **portfolio** pairs trading system built the way quant research
 desks do it: not one pair picked once, but a walk-forward schedule of pairs
 that re-qualifies every quarter, sized by volatility, and combined into a
@@ -51,6 +54,7 @@ python pair_test.py              # pre-registered pair selection on 2019-2023; w
 python news_test.py              # pre-registered 8-K entry filter; a first download needs SEC_USER_AGENT set
 python cost_test.py              # pre-registered cost levels on DISTANCE20, 2019-2023
 python past_test.py              # pre-registered DISTANCE20 on 2010-2017
+python residual_test.py stage1    # pre-registered sector-ETF residual model; stage2 needs a stage 1 pass
 python forward_test.py           # forward holdout from 2026-11-02; shows no PnL before day 252
 
 # 4. Tests (synthetic-data checks for the Kalman filter and the engine's accounting)
@@ -77,6 +81,7 @@ stat_arb/
 ├── news_test.py             # Pre-registered firm-news entry filter (SEC 8-Ks)
 ├── cost_test.py             # Pre-registered cost levels on DISTANCE20
 ├── past_test.py             # Pre-registered DISTANCE20 on 2010-2017
+├── residual_test.py         # Pre-registered sector-ETF residual model (SECTOR_RESIDUAL.md)
 ├── forward_test.py          # Forward holdout from 2026-11-02, blinded until day 252
 ├── requirements.txt
 ├── data/
@@ -679,6 +684,40 @@ is -0.04, and the bar was above 0. The holdout runs anyway, as committed.
 - **No spin-off distortion.** No trade was open across a one-day move of 0.25 or
   more, so the unadjusted DHR spin-off did not touch this book.
 
+### Sector-ETF residual model (pre-registered)
+
+`residual_test.py` trades each stock against its sector ETF with Avellaneda and
+Lee's rules, fills at the close after the signal, and holds at most 20 positions
+with gross capped at 2.0x. The design is in `SECTOR_RESIDUAL.md`. It was committed
+in a0d2f5a before any signal ran on real prices. The bar was a Sharpe of 1.0 at
+REALISTIC on both samples, with 1 trial added. N is now 91.
+
+| Sample | FREE | CURRENT | REALISTIC | HARSH | Trades | Gross/yr | Break-even |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2010-2017, 229 stocks | 0.74 | 0.38 | **-0.24** | -1.22 | 3,653 | +3.5% | 4.1bp |
+| 2019-2023, 281 stocks | 0.01 | -0.21 | **-0.59** | -1.20 | 2,222 | +0.1% | 0.1bp |
+
+**Decision, by the pre-registered rule: ADVANCE: NO.** Stage 2 did not run, so this
+model has read no data after 2023. A failure ends this configuration: its
+thresholds, lag and slots stay as they are.
+
+- **There is no edge to pay costs from.** On 2019-2023 the model earns +0.07% a year
+  before costs, with both sides losing (long -6.0%, short -5.9% in trade PnL). Its
+  Sharpe fell through the sample, from 1.19 gross in 2019 to -1.53 in 2023.
+- **The older gain looks like survivorship.** On 2010-2017 the long side made +17.7%
+  and the short side lost -10.0%. Buying laggards from a list of survivors should
+  look like that, so the 0.74 is weak evidence even before costs.
+- **It doesn't beat pairs.** RESIDUAL minus DISTANCE20 at REALISTIC, at equal vol, has
+  t = -1.49 on 2019-2023.
+- **The sizing worked, and the slots always filled.** Gross peaked at exactly 2.00x
+  and averaged 1.6x. All 20 slots were full on average and entries were blocked every
+  day, so the book only ever held the most extreme scores. That wasn't searched, and
+  testing more slots would be a new trial.
+- **The one-day lag may have cost a lot.** It can't be separated here, and the paper's
+  same-close fill can't be traded, so it wouldn't change the decision.
+- **No data fault.** Six trades crossed a one-day move of 0.25 or more, five in the
+  March 2020 crash and META in October 2022. They are real moves and total -1.8%.
+
 ### Next steps (not done)
 
 - **Measure real costs.** REALISTIC is an assumption. Paper fills on these names
@@ -686,8 +725,9 @@ is -0.04, and the bar was above 0. The holdout runs anyway, as committed.
   to 7.3bp per leg.
 - **Earn more per trade.** Scaling down doesn't help, because PnL and costs
   shrink together. A wider entry band might, and would count as a new trial.
-- **Change the model.** Trade each stock's residual against its sector ETF
-  (Avellaneda-Lee) instead of pairs.
+- **Use different information.** Pairs and the sector-ETF residual both failed at
+  realistic costs, so another daily signal built from these prices is unlikely to
+  help.
 - **Normalise the base rate out of the labels**: predict whether a signal
   beats its own quarter's median, or gate on within-quarter rank instead of
   an absolute p. Sample-uniqueness weights (AFML ch. 4) would also stop one
